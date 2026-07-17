@@ -5,38 +5,140 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RELAY — Sponsored Content Reporting</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232a78d6'/><text x='50' y='72' font-size='62' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>R</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%234353e8'/><path d='M30 72V28h22a14 14 0 0 1 0 28H41l17 16h-15L30 60' fill='white'/></svg>">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark">R</span>
-    <div class="brand-text">
-      <h1>RELAY</h1>
-      <p class="tagline">Sponsored content reporting — Somoy TV</p>
+<div class="shell">
+
+<!-- ═════════ Sidebar ═════════ -->
+<aside class="sidebar">
+  <div class="logo">
+    <span class="logo-mark">R</span>
+    <span class="logo-word">RELAY</span>
+  </div>
+
+  <nav class="nav">
+    <button class="nav-item active" data-view="dashboard">
+      <svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
+      Dashboard</button>
+    <button class="nav-item" data-view="inputs">
+      <svg viewBox="0 0 24 24"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm8 1v5h5"/></svg>
+      Data Sources</button>
+    <button class="nav-item" data-view="review" data-locked>
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      Match Review</button>
+    <button class="nav-item" data-view="report" data-locked>
+      <svg viewBox="0 0 24 24"><path d="M5 20V10m5 10V4m5 16v-7m5 7V8"/></svg>
+      Reports</button>
+  </nav>
+
+  <div class="sidebar-card" id="syncCard">
+    <div class="sync-row"><span class="spin-ic">↻</span><div>
+      <strong id="syncTitle">No run yet</strong>
+      <span class="sub" id="syncSub">Upload this month's files</span>
+    </div></div>
+    <div class="sync-status"><span class="status-dot"></span>All systems operational</div>
+  </div>
+
+  <div class="sidebar-foot">
+    <div class="avatar">A</div>
+    <div><strong>Asaj Ibtisam</strong><span class="sub">Platform Management</span></div>
+  </div>
+</aside>
+
+<!-- ═════════ Main ═════════ -->
+<div class="appmain">
+
+<!-- ── Dashboard ── -->
+<section id="view-dashboard" class="view">
+  <header class="page-head">
+    <div>
+      <h1 id="greeting">Good morning 👋</h1>
+      <p class="hint" id="greetSub">Here's an overview of your sponsored content performance.</p>
+    </div>
+    <div class="head-actions">
+      <span class="range-pill" id="rangePill">📅 No month loaded</span>
+      <button class="ghost" id="exportBtn" disabled>⬇ Export Report</button>
+      <button class="primary" id="newRunBtn">＋ New Run</button>
+    </div>
+  </header>
+
+  <div id="dashEmpty" class="empty-state">
+    <div class="empty-icon">📊</div>
+    <h2>No data yet this session</h2>
+    <p class="hint">Load a month in <strong>Data Sources</strong> — the dashboard fills itself from the run.</p>
+    <button class="primary lg" data-goto-view="inputs">Go to Data Sources →</button>
+  </div>
+
+  <div id="dashBody" hidden>
+    <div class="kpi-row" id="kpiRow"></div>
+
+    <div class="grid-main">
+      <figure class="card chart-card">
+        <figcaption>
+          <div><strong>Performance Overview</strong>
+            <span class="sub" id="chartSub">daily views by platform</span></div>
+          <div class="legend" id="lineLegend"></div>
+        </figcaption>
+        <div id="lineChart" class="line-chart"></div>
+      </figure>
+
+      <div class="card platform-summary">
+        <strong class="card-title">Platform Summary</strong>
+        <div id="platformSummary"></div>
+        <button class="link-btn" data-goto-view="report">View report details →</button>
+      </div>
+    </div>
+
+    <div class="grid-three">
+      <div class="card">
+        <strong class="card-title">Content Matching Overview</strong>
+        <div class="donut-wrap">
+          <div id="donut" class="donut"></div>
+          <ul id="donutLegend" class="donut-legend"></ul>
+        </div>
+        <button class="link-btn" data-goto-view="review">View all content →</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title-row">
+          <strong class="card-title">Top Performing Content</strong>
+        </div>
+        <ol id="topContent" class="top-list"></ol>
+        <button class="link-btn" data-goto-view="review">View all content →</button>
+      </div>
+
+      <div class="card">
+        <strong class="card-title">Recent Activity</strong>
+        <ul id="activity" class="activity"></ul>
+      </div>
+    </div>
+
+    <div class="card quick-actions">
+      <strong>Quick Actions</strong>
+      <div class="qa-row">
+        <button class="qa" data-goto-view="report">📄 Generate Report</button>
+        <button class="qa" id="qaCollectX">🐦 Collect X Views</button>
+        <button class="qa" id="qaCollectFB">📘 Collect Facebook</button>
+        <button class="qa" data-goto-view="report" data-open-cc>🛡 Data Quality Check</button>
+      </div>
     </div>
   </div>
-  <nav class="steps" id="stepNav" aria-label="Workflow stages">
-    <button class="step active" data-goto="inputs"><span class="step-n">1</span><span>Inputs</span></button>
-    <span class="step-sep"></span>
-    <button class="step" data-goto="review" disabled><span class="step-n">2</span><span>Review</span></button>
-    <span class="step-sep"></span>
-    <button class="step" data-goto="report" disabled><span class="step-n">3</span><span>Report</span></button>
-  </nav>
-</header>
+</section>
 
-<main>
-<!-- ── Stage 1 · Inputs ─────────────────────────────────────── -->
-<section id="inputs" class="stage">
-  <div class="stage-head">
-    <h2>Monthly inputs</h2>
-    <p class="hint">Drop this month's files. Only the campaign sheet is required — the supervisor's
-    matched files pre-fill most cells, and the collectors scrape whatever is left.</p>
-  </div>
+<!-- ── Data Sources (inputs) ── -->
+<section id="view-inputs" class="view" hidden>
+  <header class="page-head">
+    <div>
+      <h1>Data Sources</h1>
+      <p class="hint">Drop this month's files. Only the campaign sheet is required — supervisor
+      files pre-fill most cells, collectors scrape the rest.</p>
+    </div>
+  </header>
 
   <div class="drop-grid">
     <div class="drop" data-kind="campaign" tabindex="0">
-      <div class="drop-icon">📋</div>
+      <div class="drop-icon ic-indigo">📋</div>
       <div class="drop-body">
         <div class="drop-head"><strong>Campaign sheet</strong><span class="req">required</span></div>
         <p>Per-brand tracker — No / Date / Content / Links</p>
@@ -44,7 +146,7 @@
       </div>
     </div>
     <div class="drop" data-kind="mainpage" tabindex="0">
-      <div class="drop-icon">📰</div>
+      <div class="drop-icon ic-blue">📰</div>
       <div class="drop-body">
         <div class="drop-head"><strong>Mainpage matched</strong><span class="opt">optional</span></div>
         <p>Somoy News TV views (supervisor file)</p>
@@ -52,7 +154,7 @@
       </div>
     </div>
     <div class="drop" data-kind="subpage" tabindex="0">
-      <div class="drop-icon">🗞️</div>
+      <div class="drop-icon ic-green">🗞️</div>
       <div class="drop-body">
         <div class="drop-head"><strong>Subpage matched</strong><span class="opt">optional</span></div>
         <p>Shongbad + category subpages (supervisor file)</p>
@@ -60,7 +162,7 @@
       </div>
     </div>
     <div class="drop" data-kind="insta" tabindex="0">
-      <div class="drop-icon">📸</div>
+      <div class="drop-icon ic-pink">📸</div>
       <div class="drop-body">
         <div class="drop-head"><strong>Instagram matched</strong><span class="opt">optional</span></div>
         <p>Instagram views (supervisor file)</p>
@@ -69,7 +171,7 @@
     </div>
   </div>
 
-  <div class="panel run-panel">
+  <div class="card run-panel">
     <label>Brand
       <input id="brand" type="text" placeholder="e.g. White Plus" list="brandHints">
       <datalist id="brandHints"></datalist>
@@ -77,45 +179,44 @@
     <label>Month tab
       <select id="sheet" disabled><option>Upload campaign first</option></select>
     </label>
-    <button id="runBtn" class="primary lg" disabled>Run matching&ensp;→</button>
+    <button id="runBtn" class="primary lg" disabled>Run matching →</button>
   </div>
   <p id="runError" class="error" hidden></p>
 </section>
 
-<!-- ── Stage 2 · Review ─────────────────────────────────────── -->
-<section id="review" class="stage" hidden>
-  <div class="stage-head row">
+<!-- ── Match Review ── -->
+<section id="view-review" class="view" hidden>
+  <header class="page-head">
     <div>
-      <h2>Match review</h2>
-      <p class="hint">Everything the supervisor files resolved is filled in. Use the collectors
-      below to scrape the rest, or click any cell to fix it yourself.</p>
+      <h1>Match Review</h1>
+      <p class="hint">Supervisor-file matches are filled in. Collectors scrape the rest —
+      or click any cell to fix it yourself.</p>
     </div>
     <div class="filters" role="group" aria-label="Row filter">
       <button class="chip-filter active" data-filter="all">All rows</button>
       <button class="chip-filter" data-filter="attention">Needs attention</button>
     </div>
-  </div>
+  </header>
 
   <div class="tiles" id="coverageTiles"></div>
 
-  <!-- ── Auto-fill / collectors ── -->
-  <div class="panel collect-panel">
+  <div class="card collect-panel">
     <div class="collect-head">
-      <h3>⚡ Auto-fill missing values</h3>
+      <strong>⚡ Auto-fill missing values</strong>
       <p class="hint">Scrapers run right here, politely paced so your accounts stay safe.
       Values land in the table live.</p>
     </div>
     <div class="collect-actions">
       <div class="collect-card">
-        <div class="collect-title">X / Twitter impressions</div>
-        <p>Reads the public view count from each post page. No login, no
-           credentials — your official account is never touched.</p>
+        <div class="collect-title">🐦 X / Twitter impressions</div>
+        <p>Reads the public view count from each post page. No login, no credentials —
+           your official account is never touched.</p>
         <button id="collectX" class="primary">Collect X views</button>
       </div>
       <div class="collect-card">
-        <div class="collect-title">Facebook missing cells</div>
-        <p>Uses your saved Meta Business Suite session for real views; shared
-           posts fall back to reactions × <span id="kLabel">95</span> automatically.</p>
+        <div class="collect-title">📘 Facebook missing cells</div>
+        <p>Uses your saved Meta Business Suite session for real views; shared posts fall
+           back to reactions × <span id="kLabel">95</span> automatically.</p>
         <div class="collect-fb-row">
           <button id="collectFB" class="primary">Collect Facebook</button>
           <label class="k-inline">k <input id="kCollect" type="range" min="70" max="120" value="95">
@@ -134,7 +235,7 @@
     <p id="collectError" class="error" hidden></p>
   </div>
 
-  <div class="legend">
+  <div class="legend table-legend">
     <span><i class="dot p-matched"></i>matched</span>
     <span><i class="dot p-collected"></i>scraped</span>
     <span><i class="dot p-estimated"></i>estimated</span>
@@ -142,7 +243,7 @@
     <span><i class="dot p-missing"></i>missing</span>
   </div>
 
-  <div class="table-wrap panel">
+  <div class="table-wrap card">
     <table id="reviewTable">
       <thead>
         <tr>
@@ -156,28 +257,30 @@
   </div>
   <div id="issues" class="issues" hidden></div>
   <div class="stage-foot">
-    <button id="toReport" class="primary lg">Continue to report&ensp;→</button>
+    <button id="toReport" class="primary lg">Continue to report →</button>
   </div>
 </section>
 
-<!-- ── Stage 3 · Report ─────────────────────────────────────── -->
-<section id="report" class="stage" hidden>
-  <div class="stage-head">
-    <h2>Report</h2>
-    <p class="hint">The generated workbook matches your hand-made template exactly —
-    banner, live Sum / Total / Average formulas, styling and all.</p>
-  </div>
+<!-- ── Reports ── -->
+<section id="view-report" class="view" hidden>
+  <header class="page-head">
+    <div>
+      <h1>Reports</h1>
+      <p class="hint">The generated workbook matches your hand-made template exactly —
+      banner, live Sum / Total / Average formulas, styling and all.</p>
+    </div>
+  </header>
   <div class="tiles" id="reportTiles"></div>
 
-  <figure class="panel chart-card">
+  <figure class="card chart-card">
     <figcaption>
-      <strong>Views by platform</strong>
-      <span class="sub">sum of resolved cells this month</span>
+      <div><strong>Views by platform</strong>
+      <span class="sub">sum of resolved cells this month</span></div>
     </figcaption>
     <div id="platformChart" class="hbar-chart" role="img" aria-label="Total views per platform"></div>
   </figure>
 
-  <div class="panel gen-row">
+  <div class="card gen-row">
     <label class="toggle">
       <input type="checkbox" id="commentsToggle" checked>
       <span>Mark estimated cells with comments <span class="sub">(untick for the sponsor-facing copy)</span></span>
@@ -188,7 +291,7 @@
     </div>
   </div>
 
-  <details class="panel crosscheck">
+  <details class="card crosscheck" id="ccPanel">
     <summary>Cross-check against a reference report</summary>
     <p class="hint">Drop last cycle's hand-made report to verify RELAY cell-by-cell.</p>
     <div class="drop slim" data-kind="reference" tabindex="0">
@@ -198,7 +301,9 @@
     <div id="ccResult" hidden></div>
   </details>
 </section>
-</main>
+
+</div><!-- /appmain -->
+</div><!-- /shell -->
 
 <!-- cell editor dialog -->
 <dialog id="cellDialog">

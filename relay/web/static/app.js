@@ -10,14 +10,50 @@ const state = {
   filter: "all",
   editing: null,      // {rowNo, slot}
   collecting: null,   // "x" | "fb" while a job runs
-  freshCells: new Set(),  // "rowNo:slot" recently filled by a collector
+  freshCells: new Set(),
 };
 
 const SLOT_LABELS = { fb1: "FB 1", fb2: "FB 2", fb3: "FB 3", x: "X", ig: "IG" };
 const PLATFORM_LABELS = { fb1: "FB · Main", fb2: "FB · Shongbad", fb3: "FB · Subpage", x: "X / Twitter", ig: "Instagram" };
 const fmt = (n) => n == null ? "—" : n.toLocaleString("en-US");
+const fmtShort = (n) => {
+  if (n == null) return "—";
+  if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.?0+$/, "") + "K";
+  return String(n);
+};
 
-/* ── uploads ─────────────────────────────────────────────── */
+/* ═════════ navigation ═════════ */
+function showView(id) {
+  $$(".view").forEach((v) => { v.hidden = v.id !== `view-${id}`; });
+  $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === id));
+  if (id === "dashboard") renderDashboard();
+  if (id === "report") renderReport();
+  window.scrollTo({ top: 0 });
+}
+$$(".nav-item").forEach((b) => b.addEventListener("click", () => {
+  if (b.hasAttribute("data-locked")) return;
+  showView(b.dataset.view);
+}));
+document.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-goto-view]");
+  if (go) {
+    showView(go.dataset.gotoView);
+    if (go.hasAttribute("data-open-cc")) $("#ccPanel").open = true;
+  }
+});
+function unlockViews() {
+  $$(".nav-item[data-locked]").forEach((b) => b.removeAttribute("data-locked"));
+}
+
+/* greeting */
+(function greet() {
+  const h = new Date().getHours();
+  const word = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  $("#greeting").textContent = `${word}, Asaj 👋`;
+})();
+
+/* ═════════ uploads ═════════ */
 const fileInput = $("#fileInput");
 let pendingKind = null;
 
@@ -51,22 +87,21 @@ async function uploadFile(kind, file) {
     const sel = $("#sheet");
     sel.innerHTML = data.sheets.map((s) => `<option>${esc(s)}</option>`).join("");
     sel.disabled = false;
-    guessBrand(data.name, data.sheets);
+    guessBrand(data.name);
   }
   if (kind === "reference") $("#ccBtn").disabled = false;
   $("#runBtn").disabled = !state.files.campaign;
 }
 
-function guessBrand(filename, sheets) {
+function guessBrand(filename) {
   const stop = /campaign|updated|photocard|fb|social|card|matched|_|\.xlsx/gi;
   const guess = filename.replace(stop, " ").replace(/['\d]/g, " ").trim().split(/\s+/).slice(0, 2).join(" ");
   const dl = $("#brandHints");
-  dl.innerHTML = "";
-  if (guess) dl.innerHTML = `<option value="${esc(guess)}">`;
+  dl.innerHTML = guess ? `<option value="${esc(guess)}">` : "";
   if (!$("#brand").value && guess) $("#brand").value = guess;
 }
 
-/* ── run ─────────────────────────────────────────────────── */
+/* ═════════ run ═════════ */
 $("#runBtn").addEventListener("click", async () => {
   const body = {
     campaign: state.files.campaign.path,
@@ -84,15 +119,22 @@ $("#runBtn").addEventListener("click", async () => {
     });
     if (!res.ok) throw new Error(await errText(res));
     state.run = await res.json();
-    enterStage("review");
+    unlockViews();
+    $("#exportBtn").disabled = false;
+    $("#rangePill").textContent = `📅 ${state.run.brand} · ${state.run.month}`;
+    $("#syncTitle").textContent = `${state.run.brand} · ${state.run.month}`;
+    $("#syncSub").textContent = `${state.run.rows.length} content rows loaded`;
     renderReview();
+    showView("review");
   } catch (e) {
     showError(e.message);
   } finally {
     $("#runBtn").disabled = false;
-    $("#runBtn").textContent = "Run matching";
+    $("#runBtn").textContent = "Run matching →";
   }
 });
+$("#newRunBtn").addEventListener("click", () => showView("inputs"));
+$("#exportBtn").addEventListener("click", () => showView("report"));
 
 function showError(msg) {
   const el = $("#runError");
@@ -105,21 +147,229 @@ async function errText(res) {
   catch { return res.statusText; }
 }
 
-/* ── stages ──────────────────────────────────────────────── */
-function enterStage(id) {
-  $$(".stage").forEach((s) => { s.hidden = s.id !== id; });
-  $$("#stepNav .step").forEach((b) => {
-    b.classList.toggle("active", b.dataset.goto === id);
-    if (state.run) b.disabled = false;
-  });
-  if (id === "report") renderReport();
-  window.scrollTo({ top: 0 });
+/* ═════════ dashboard ═════════ */
+function slotSums() {
+  const sums = { fb1: 0, fb2: 0, fb3: 0, x: 0, ig: 0 };
+  for (const row of state.run.rows) {
+    for (const s of Object.keys(sums)) sums[s] += row.cells[s].value ?? 0;
+  }
+  return sums;
 }
-$$("#stepNav .step").forEach((b) =>
-  b.addEventListener("click", () => !b.disabled && enterStage(b.dataset.goto)));
-$("#toReport").addEventListener("click", () => enterStage("report"));
 
-/* ── review stage ────────────────────────────────────────── */
+function matchStats() {
+  let matched = 0, adjusted = 0, missing = 0;
+  for (const row of state.run.rows) {
+    for (const [slot, c] of Object.entries(row.cells)) {
+      if (!row.links[slot]) continue;
+      if (c.value == null) missing += 1;
+      else if (c.provenance === "matched" || c.provenance === "collected") matched += 1;
+      else adjusted += 1;
+    }
+  }
+  return { matched, adjusted, missing, total: matched + adjusted + missing };
+}
+
+function renderDashboard() {
+  const has = !!state.run;
+  $("#dashEmpty").hidden = has;
+  $("#dashBody").hidden = !has;
+  if (!has) return;
+
+  const r = state.run;
+  const sums = slotSums();
+  const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
+  const total = fbTotal + sums.x + sums.ig;
+  const ms = matchStats();
+  const rate = ms.total ? Math.round((ms.matched + ms.adjusted) / ms.total * 100) : 0;
+
+  $("#greetSub").textContent =
+    `Here's the ${r.brand} · ${r.month} sponsored content performance.`;
+
+  $("#kpiRow").innerHTML = [
+    kpi("📦", "ic-indigo", "Total Contents", String(r.rows.length), "photocards this month"),
+    kpi("👁", "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
+    kpi("📘", "ic-green", "Facebook Views", fmtShort(fbTotal), "links 1–3"),
+    kpi("📸", "ic-pink", "Instagram Views", fmtShort(sums.ig), "reels & posts"),
+    kpi("𝕏", "ic-navy", "X Impressions", fmtShort(sums.x), sums.x ? "scraped, real" : "run the X collector"),
+  ].join("");
+
+  renderLineChart();
+  renderPlatformSummary(sums);
+  renderDonut(ms);
+  renderTopContent();
+  renderActivity();
+}
+
+function kpi(icon, cls, label, value, extra) {
+  return `<div class="kpi"><div class="kpi-ic ${cls}">${icon}</div><div>
+    <div class="kpi-label">${esc(label)}</div>
+    <div class="kpi-value">${esc(value)}</div>
+    <div class="kpi-extra">${esc(extra)}</div></div></div>`;
+}
+
+/* line chart: daily views per platform (real dates from the campaign sheet) */
+const SERIES = [
+  { key: "fb", label: "Facebook Views", css: "var(--fb)", slots: ["fb1", "fb2", "fb3"] },
+  { key: "ig", label: "Instagram Views", css: "var(--igc)", slots: ["ig"] },
+  { key: "x", label: "X Impressions", css: "var(--xc)", slots: ["x"] },
+];
+
+function dailySeries() {
+  const byDay = new Map();
+  for (const row of state.run.rows) {
+    const day = row.date ? row.date.slice(0, 10) : null;
+    if (!day) continue;
+    if (!byDay.has(day)) byDay.set(day, { fb: 0, ig: 0, x: 0 });
+    const agg = byDay.get(day);
+    for (const s of SERIES) {
+      for (const slot of s.slots) agg[s.key] += row.cells[slot].value ?? 0;
+    }
+  }
+  return [...byDay.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+}
+
+function renderLineChart() {
+  const days = dailySeries();
+  const el = $("#lineChart");
+  $("#lineLegend").innerHTML = SERIES.map((s) =>
+    `<span><i class="sw" style="background:${s.css}"></i>${s.label}</span>`).join("");
+  if (days.length < 2) {
+    el.innerHTML = `<p class="hint">Not enough dated rows for a daily chart.</p>`;
+    return;
+  }
+  const W = 760, H = 260, PL = 46, PR = 12, PT = 10, PB = 26;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const maxY = Math.max(1, ...days.flatMap(([, v]) => [v.fb, v.ig, v.x]));
+  const x = (i) => PL + (i / (days.length - 1)) * iw;
+  const y = (v) => PT + ih - (v / maxY) * ih;
+
+  const ticks = 4;
+  let g = "";
+  for (let t = 0; t <= ticks; t++) {
+    const yy = PT + (ih / ticks) * t;
+    const val = maxY * (1 - t / ticks);
+    g += `<line class="lc-grid" x1="${PL}" y1="${yy}" x2="${W - PR}" y2="${yy}"/>`;
+    g += `<text class="lc-axis" x="${PL - 8}" y="${yy + 4}" text-anchor="end">${fmtShort(Math.round(val))}</text>`;
+  }
+  const labEvery = Math.ceil(days.length / 7);
+  days.forEach(([d], i) => {
+    if (i % labEvery) return;
+    const dt = new Date(d + "T00:00:00");
+    g += `<text class="lc-axis" x="${x(i)}" y="${H - 8}" text-anchor="middle">` +
+         `${dt.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</text>`;
+  });
+
+  let paths = "";
+  for (const s of SERIES) {
+    const pts = days.map(([, v], i) => `${x(i).toFixed(1)},${y(v[s.key]).toFixed(1)}`);
+    if (s.key !== "x") {
+      const area = `M${x(0)},${y(0) + 0} L${pts.join(" L")} L${x(days.length - 1)},${PT + ih} L${PL},${PT + ih} Z`;
+      paths += `<path d="M${pts.join(" L")} L${x(days.length - 1).toFixed(1)},${(PT + ih).toFixed(1)} L${PL},${(PT + ih).toFixed(1)} Z" fill="${s.css}" opacity="0.07"/>`;
+    }
+    paths += `<path class="lc-line" stroke="${s.css}" d="M${pts.join(" L")}"/>`;
+  }
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${g}${paths}
+    <line id="lcCross" class="crosshair" y1="${PT}" y2="${PT + ih}" x1="-10" x2="-10"/>
+    <rect id="lcHit" x="${PL}" y="${PT}" width="${iw}" height="${ih}" fill="transparent"/>
+  </svg>`;
+
+  const svg = el.querySelector("svg");
+  const hit = el.querySelector("#lcHit");
+  const cross = el.querySelector("#lcCross");
+  hit.addEventListener("mousemove", (e) => {
+    const box = svg.getBoundingClientRect();
+    const px = ((e.clientX - box.left) / box.width) * W;
+    const i = Math.max(0, Math.min(days.length - 1, Math.round(((px - PL) / iw) * (days.length - 1))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i));
+    const [d, v] = days[i];
+    const dt = new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+    showTip(e, `<strong>${dt}</strong>` + SERIES.map((s) =>
+      `<div class="tt-row"><i class="sw" style="background:${s.css}"></i>${s.label}: ${fmt(v[s.key])}</div>`).join(""));
+  });
+  hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("x1", -10); cross.setAttribute("x2", -10); });
+}
+
+function renderPlatformSummary(sums) {
+  const cov = state.run.coverage;
+  const rows = [
+    { ic: "f", bg: "#2a78d6", name: "Facebook", sub: "Views", val: sums.fb1 + sums.fb2 + sums.fb3,
+      cov: (cov.fb1 + cov.fb2 + cov.fb3) / 3 },
+    { ic: "📸", bg: "#e87ba4", name: "Instagram", sub: "Views", val: sums.ig, cov: cov.ig },
+    { ic: "𝕏", bg: "#14161f", name: "X (Twitter)", sub: "Impressions", val: sums.x, cov: cov.x },
+  ];
+  $("#platformSummary").innerHTML = rows.map((r) => `
+    <div class="ps-row">
+      <div class="ps-ic" style="background:${r.bg}">${r.ic}</div>
+      <div class="ps-name"><strong>${r.name}</strong><span class="sub">${r.sub}</span></div>
+      <div style="text-align:right">
+        <div class="ps-val">${fmtShort(r.val)}</div>
+        <div class="ps-cov ${r.cov >= 0.85 ? "ok" : "low"}">${Math.round(r.cov * 100)}% filled</div>
+      </div>
+    </div>`).join("");
+}
+
+function renderDonut(ms) {
+  const rate = ms.total ? Math.round((ms.matched + ms.adjusted) / ms.total * 100) : 0;
+  const segs = [
+    { label: "Matched", val: ms.matched, color: "var(--good)" },
+    { label: "Adjusted", val: ms.adjusted, color: "var(--warning)" },
+    { label: "Missing", val: ms.missing, color: "var(--critical)" },
+  ];
+  const C = 2 * Math.PI * 54;
+  let off = 0, arcs = "";
+  for (const s of segs) {
+    const frac = ms.total ? s.val / ms.total : 0;
+    const len = frac * C;
+    arcs += `<circle r="54" cx="69" cy="69" fill="none" stroke="${s.color}"
+      stroke-width="16" stroke-dasharray="${Math.max(len - 2, 0)} ${C - len + 2}"
+      stroke-dashoffset="${-off}"/>`;
+    off += len;
+  }
+  $("#donut").innerHTML = `<svg viewBox="0 0 138 138">${arcs}</svg>
+    <div class="donut-center"><div><strong>${rate}%</strong><span class="sub">Fill rate</span></div></div>`;
+  $("#donutLegend").innerHTML = segs.map((s) => {
+    const pct = ms.total ? ((s.val / ms.total) * 100).toFixed(1) : "0";
+    return `<li><i class="dot" style="background:${s.color}"></i>${s.label}
+      <span class="dl-val">${s.val} (${pct}%)</span></li>`;
+  }).join("");
+}
+
+function renderTopContent() {
+  const rows = state.run.rows.map((row) => ({
+    row,
+    total: Object.values(row.cells).reduce((a, c) => a + (c.value ?? 0), 0),
+  })).sort((a, b) => b.total - a.total).slice(0, 5);
+  $("#topContent").innerHTML = rows.map((r, i) => `
+    <li><span class="top-rank">${i + 1}</span>
+      <span class="top-cap" title="${esc(r.row.caption)}">${esc(r.row.caption)}</span>
+      <span class="top-val">${fmtShort(r.total)}</span></li>`).join("");
+}
+
+async function renderActivity() {
+  let items = [];
+  try {
+    const runs = await (await fetch("/api/runs")).json();
+    items = runs.slice(0, 5).map((r) => ({
+      ic: "📄",
+      title: `${r.brand} · ${r.month} ${r.status === "generated" ? "report generated" : "matched"}`,
+      sub: r.status === "generated" ? (r.output_file || "").split("/").pop() : "matching run saved",
+      time: new Date(r.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+    }));
+  } catch { /* activity is optional */ }
+  $("#activity").innerHTML = items.length ? items.map((a) => `
+    <li><div class="act-ic">${a.ic}</div>
+      <div class="act-body"><strong>${esc(a.title)}</strong><span class="sub">${esc(a.sub)}</span></div>
+      <span class="act-time">${a.time}</span></li>`).join("")
+    : `<li class="hint">No runs recorded yet.</li>`;
+}
+
+/* quick actions */
+$("#qaCollectX").addEventListener("click", () => { showView("review"); startCollect("x"); });
+$("#qaCollectFB").addEventListener("click", () => { showView("review"); startCollect("fb"); });
+
+/* ═════════ review ═════════ */
 $$(".chip-filter").forEach((b) => b.addEventListener("click", () => {
   $$(".chip-filter").forEach((x) => x.classList.remove("active"));
   b.classList.add("active");
@@ -128,7 +378,6 @@ $$(".chip-filter").forEach((b) => b.addEventListener("click", () => {
 }));
 
 function needsAttention(row) {
-  // X cells stay empty until collectors run — don't flag every row for them
   return Object.entries(row.cells).some(([slot, c]) =>
     (slot !== "x" && row.links[slot] && c.value == null) ||
     (c.value != null && c.confidence < 0.95));
@@ -156,7 +405,7 @@ function renderReview() {
 }
 
 function tile(label, value, extra, warn = false) {
-  return `<div class="tile"><div class="t-label">${esc(label)}</div>
+  return `<div class="tile${warn ? " warn" : ""}"><div class="t-label">${esc(label)}</div>
     <div class="t-value${warn ? " warn" : ""}">${esc(value)}</div>
     <div class="t-extra">${esc(extra)}</div></div>`;
 }
@@ -173,7 +422,7 @@ function renderReviewRows() {
       ${["fb1", "fb2", "fb3", "x", "ig"].map((slot) => cellHtml(row, slot)).join("")}
     </tr>`;
   }).join("");
-  if (!rows.length) tbody.innerHTML = `<tr><td colspan="8" class="noval">Nothing needs attention 🎉</td></tr>`;
+  if (!rows.length) tbody.innerHTML = `<tr><td colspan="8" class="hint" style="padding:18px">Nothing needs attention 🎉</td></tr>`;
 }
 
 function cellHtml(row, slot) {
@@ -199,7 +448,7 @@ function provTip(c) {
   return parts.join(" — ");
 }
 
-/* ── cell editor dialog ──────────────────────────────────── */
+/* ═════════ cell editor ═════════ */
 const dialog = $("#cellDialog");
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".cell-edit");
@@ -255,7 +504,7 @@ function recomputeCoverage() {
   state.run.coverage = cov;
 }
 
-/* ── collectors ──────────────────────────────────────────── */
+/* ═════════ collectors ═════════ */
 $("#kCollect").addEventListener("input", () => {
   $("#kCollectOut").textContent = $("#kCollect").value;
   $("#kLabel").textContent = $("#kCollect").value;
@@ -264,7 +513,7 @@ $("#collectX").addEventListener("click", () => startCollect("x"));
 $("#collectFB").addEventListener("click", () => startCollect("fb"));
 
 async function startCollect(target) {
-  if (state.collecting) return;
+  if (!state.run || state.collecting) return;
   const body = { run_id: state.run.run_id, target, k: +$("#kCollect").value };
   const res = await fetch("/api/collect", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -296,7 +545,6 @@ async function pollCollect(target) {
   if (s.state === "idle") { setTimeout(() => pollCollect(target), 1200); return; }
 
   if (s.run) {
-    // mark cells that newly gained a value so they pop in the table
     for (const row of s.run.rows) {
       const old = state.run.rows.find((r) => r.no === row.no);
       for (const slot of Object.keys(row.cells)) {
@@ -336,19 +584,16 @@ function finishCollect(message) {
   setTimeout(() => state.freshCells.clear(), 4000);
 }
 
-/* ── report stage ────────────────────────────────────────── */
+/* ═════════ report ═════════ */
+$("#toReport").addEventListener("click", () => showView("report"));
+
 function renderReport() {
+  if (!state.run) return;
   const r = state.run;
-  const sums = {};
-  for (const slot of ["fb1", "fb2", "fb3", "x", "ig"]) {
-    sums[slot] = r.rows.reduce((a, row) => a + (row.cells[slot].value ?? 0), 0);
-  }
+  const sums = slotSums();
   const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
   const grand = fbTotal + sums.x + sums.ig;
-  const filled = r.rows.flatMap((row) => Object.entries(row.cells)
-    .filter(([slot, c]) => row.links[slot])).length;
-  const resolved = r.rows.flatMap((row) => Object.entries(row.cells)
-    .filter(([slot, c]) => row.links[slot] && c.value != null)).length;
+  const ms = matchStats();
   const est = r.rows.flatMap((row) => Object.values(row.cells)
     .filter((c) => c.provenance === "estimated")).length;
 
@@ -357,7 +602,8 @@ function renderReport() {
     tile("Total views", fmt(grand), "all platforms, resolved cells"),
     tile("Facebook", fmt(fbTotal), "links 1–3"),
     tile("Instagram", fmt(sums.ig), "views"),
-    tile("Resolved", `${resolved}/${filled}`, est ? `cells · ${est} estimated` : "cells", resolved < filled),
+    tile("Resolved", `${ms.matched + ms.adjusted}/${ms.total}`, est ? `cells · ${est} estimated` : "cells",
+      ms.missing > 0),
   ].join("");
 
   const chartRows = [
@@ -367,7 +613,7 @@ function renderReport() {
   const max = Math.max(...chartRows.map(([, v]) => v), 1);
   $("#platformChart").innerHTML = chartRows.map(([label, v]) => {
     const pct = (v / max) * 100;
-    const inside = pct > 82;   // long bars label inside; short ones at the bar end
+    const inside = pct > 82;
     return `
     <div class="hbar-row">
       <div class="hbar-label">${esc(label)}</div>
@@ -388,10 +634,10 @@ $("#genBtn").addEventListener("click", async () => {
   const dl = $("#dlBtn");
   dl.hidden = false;
   dl.href = `/api/report/${state.run.run_id}/download`;
-  dl.textContent = `Download ${data.name}`;
+  dl.textContent = `⬇ Download ${data.name}`;
 });
 
-/* ── cross-check ─────────────────────────────────────────── */
+/* ═════════ cross-check ═════════ */
 $("#ccBtn").addEventListener("click", async () => {
   const ref = state.files.reference;
   if (!ref) return;
@@ -410,7 +656,7 @@ $("#ccBtn").addEventListener("click", async () => {
     <p><span class="cc-acc">${(cc.accuracy * 100).toFixed(1)}%</span>
        &nbsp;${cc.equal} of ${cc.cells} comparable cells identical</p>
     ${cc.differs.length + cc.only_generated.length + cc.only_reference.length ? `
-    <div class="table-wrap"><table>
+    <div class="table-wrap card" style="box-shadow:none"><table>
       <thead><tr><th>Row</th><th>Slot</th><th>RELAY</th><th>Reference</th><th>Status</th></tr></thead>
       <tbody>
         ${diffRows(cc.differs, "differs")}
@@ -420,20 +666,27 @@ $("#ccBtn").addEventListener("click", async () => {
     </table></div>` : `<p>Perfect match.</p>`}`;
 });
 
-/* ── tooltip ─────────────────────────────────────────────── */
+/* ═════════ tooltip ═════════ */
 const tooltip = $("#tooltip");
-document.addEventListener("mousemove", (e) => {
-  const t = e.target.closest("[data-tip]");
-  if (!t) { tooltip.hidden = true; return; }
-  tooltip.textContent = t.dataset.tip;
+function showTip(e, html) {
+  tooltip.innerHTML = html;
   tooltip.hidden = false;
-  const pad = 12;
+  positionTip(e);
+}
+function hideTip() { tooltip.hidden = true; }
+function positionTip(e) {
+  const pad = 14;
   let x = e.clientX + pad, y = e.clientY + pad;
   const r = tooltip.getBoundingClientRect();
   if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
   if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
   tooltip.style.left = x + "px";
   tooltip.style.top = y + "px";
+}
+document.addEventListener("mousemove", (e) => {
+  const t = e.target.closest("[data-tip]");
+  if (t) { showTip(e, esc(t.dataset.tip)); return; }
+  if (!e.target.closest("#lcHit")) hideTip();
 });
 
 function esc(s) {
