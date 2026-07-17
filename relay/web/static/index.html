@@ -5,55 +5,71 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RELAY — Sponsored Content Reporting</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232a78d6'/><text x='50' y='72' font-size='62' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>R</text></svg>">
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
-    <span class="brand-mark">📡</span>
-    <div>
+    <span class="brand-mark">R</span>
+    <div class="brand-text">
       <h1>RELAY</h1>
-      <p class="tagline">Sponsored content reporting · Somoy TV</p>
+      <p class="tagline">Sponsored content reporting — Somoy TV</p>
     </div>
   </div>
-  <nav class="steps" id="stepNav">
-    <button class="step active" data-goto="inputs"><span class="step-n">1</span>Inputs</button>
-    <button class="step" data-goto="review" disabled><span class="step-n">2</span>Review</button>
-    <button class="step" data-goto="report" disabled><span class="step-n">3</span>Report</button>
+  <nav class="steps" id="stepNav" aria-label="Workflow stages">
+    <button class="step active" data-goto="inputs"><span class="step-n">1</span><span>Inputs</span></button>
+    <span class="step-sep"></span>
+    <button class="step" data-goto="review" disabled><span class="step-n">2</span><span>Review</span></button>
+    <span class="step-sep"></span>
+    <button class="step" data-goto="report" disabled><span class="step-n">3</span><span>Report</span></button>
   </nav>
 </header>
 
 <main>
 <!-- ── Stage 1 · Inputs ─────────────────────────────────────── -->
 <section id="inputs" class="stage">
-  <h2>Monthly inputs</h2>
-  <p class="hint">Drop this month's files. Campaign sheet is required; matched files are optional
-     but resolve most cells automatically.</p>
+  <div class="stage-head">
+    <h2>Monthly inputs</h2>
+    <p class="hint">Drop this month's files. Only the campaign sheet is required — the supervisor's
+    matched files pre-fill most cells, and the collectors scrape whatever is left.</p>
+  </div>
 
   <div class="drop-grid">
-    <div class="drop" data-kind="campaign">
-      <div class="drop-head"><strong>Campaign sheet</strong><span class="req">required</span></div>
-      <p>Per-brand tracker (.xlsx) — No / Date / Content / Links</p>
-      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    <div class="drop" data-kind="campaign" tabindex="0">
+      <div class="drop-icon">📋</div>
+      <div class="drop-body">
+        <div class="drop-head"><strong>Campaign sheet</strong><span class="req">required</span></div>
+        <p>Per-brand tracker — No / Date / Content / Links</p>
+        <span class="file-name" data-empty="Click or drop .xlsx"></span>
+      </div>
     </div>
-    <div class="drop" data-kind="mainpage">
-      <div class="drop-head"><strong>Mainpage matched</strong><span class="opt">optional</span></div>
-      <p>Somoy News TV matched views (supervisor file)</p>
-      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    <div class="drop" data-kind="mainpage" tabindex="0">
+      <div class="drop-icon">📰</div>
+      <div class="drop-body">
+        <div class="drop-head"><strong>Mainpage matched</strong><span class="opt">optional</span></div>
+        <p>Somoy News TV views (supervisor file)</p>
+        <span class="file-name" data-empty="Click or drop .xlsx"></span>
+      </div>
     </div>
-    <div class="drop" data-kind="subpage">
-      <div class="drop-head"><strong>Subpage matched</strong><span class="opt">optional</span></div>
-      <p>Somoy Shongbad + category subpages (supervisor file)</p>
-      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    <div class="drop" data-kind="subpage" tabindex="0">
+      <div class="drop-icon">🗞️</div>
+      <div class="drop-body">
+        <div class="drop-head"><strong>Subpage matched</strong><span class="opt">optional</span></div>
+        <p>Shongbad + category subpages (supervisor file)</p>
+        <span class="file-name" data-empty="Click or drop .xlsx"></span>
+      </div>
     </div>
-    <div class="drop" data-kind="insta">
-      <div class="drop-head"><strong>Instagram matched</strong><span class="opt">optional</span></div>
-      <p>Instagram matched views (supervisor file)</p>
-      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    <div class="drop" data-kind="insta" tabindex="0">
+      <div class="drop-icon">📸</div>
+      <div class="drop-body">
+        <div class="drop-head"><strong>Instagram matched</strong><span class="opt">optional</span></div>
+        <p>Instagram views (supervisor file)</p>
+        <span class="file-name" data-empty="Click or drop .xlsx"></span>
+      </div>
     </div>
   </div>
 
-  <div class="run-row">
+  <div class="panel run-panel">
     <label>Brand
       <input id="brand" type="text" placeholder="e.g. White Plus" list="brandHints">
       <datalist id="brandHints"></datalist>
@@ -61,33 +77,76 @@
     <label>Month tab
       <select id="sheet" disabled><option>Upload campaign first</option></select>
     </label>
-    <button id="runBtn" class="primary" disabled>Run matching</button>
+    <button id="runBtn" class="primary lg" disabled>Run matching&ensp;→</button>
   </div>
   <p id="runError" class="error" hidden></p>
 </section>
 
 <!-- ── Stage 2 · Review ─────────────────────────────────────── -->
 <section id="review" class="stage" hidden>
-  <div class="section-head">
-    <h2>Match review</h2>
+  <div class="stage-head row">
+    <div>
+      <h2>Match review</h2>
+      <p class="hint">Everything the supervisor files resolved is filled in. Use the collectors
+      below to scrape the rest, or click any cell to fix it yourself.</p>
+    </div>
     <div class="filters" role="group" aria-label="Row filter">
       <button class="chip-filter active" data-filter="all">All rows</button>
       <button class="chip-filter" data-filter="attention">Needs attention</button>
     </div>
   </div>
+
   <div class="tiles" id="coverageTiles"></div>
-  <div class="legend" aria-hidden="false">
+
+  <!-- ── Auto-fill / collectors ── -->
+  <div class="panel collect-panel">
+    <div class="collect-head">
+      <h3>⚡ Auto-fill missing values</h3>
+      <p class="hint">Scrapers run right here, politely paced so your accounts stay safe.
+      Values land in the table live.</p>
+    </div>
+    <div class="collect-actions">
+      <div class="collect-card">
+        <div class="collect-title">X / Twitter impressions</div>
+        <p>Reads the public view count from each post page. No login, no
+           credentials — your official account is never touched.</p>
+        <button id="collectX" class="primary">Collect X views</button>
+      </div>
+      <div class="collect-card">
+        <div class="collect-title">Facebook missing cells</div>
+        <p>Uses your saved Meta Business Suite session for real views; shared
+           posts fall back to reactions × <span id="kLabel">95</span> automatically.</p>
+        <div class="collect-fb-row">
+          <button id="collectFB" class="primary">Collect Facebook</button>
+          <label class="k-inline">k <input id="kCollect" type="range" min="70" max="120" value="95">
+            <output id="kCollectOut">95</output></label>
+        </div>
+      </div>
+    </div>
+    <div id="collectProgress" class="collect-progress" hidden>
+      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+      <div class="progress-meta">
+        <span id="progressText">Starting…</span>
+        <span id="progressCount"></span>
+      </div>
+      <ul id="progressLog" class="progress-log"></ul>
+    </div>
+    <p id="collectError" class="error" hidden></p>
+  </div>
+
+  <div class="legend">
     <span><i class="dot p-matched"></i>matched</span>
+    <span><i class="dot p-collected"></i>scraped</span>
     <span><i class="dot p-estimated"></i>estimated</span>
-    <span><i class="dot p-collected"></i>collected</span>
     <span><i class="dot p-manual"></i>manual</span>
     <span><i class="dot p-missing"></i>missing</span>
   </div>
-  <div class="table-wrap">
+
+  <div class="table-wrap panel">
     <table id="reviewTable">
       <thead>
         <tr>
-          <th>No</th><th>Date</th><th class="cap-col">Content</th>
+          <th class="th-no">No</th><th>Date</th><th class="cap-col">Content</th>
           <th>FB 1 · Main</th><th>FB 2 · Shongbad</th><th>FB 3 · Subpage</th>
           <th>X</th><th>Instagram</th>
         </tr>
@@ -96,17 +155,21 @@
     </table>
   </div>
   <div id="issues" class="issues" hidden></div>
-  <div class="run-row">
-    <button id="toReport" class="primary">Continue to report →</button>
+  <div class="stage-foot">
+    <button id="toReport" class="primary lg">Continue to report&ensp;→</button>
   </div>
 </section>
 
 <!-- ── Stage 3 · Report ─────────────────────────────────────── -->
 <section id="report" class="stage" hidden>
-  <h2>Report</h2>
+  <div class="stage-head">
+    <h2>Report</h2>
+    <p class="hint">The generated workbook matches your hand-made template exactly —
+    banner, live Sum / Total / Average formulas, styling and all.</p>
+  </div>
   <div class="tiles" id="reportTiles"></div>
 
-  <figure class="chart-card">
+  <figure class="panel chart-card">
     <figcaption>
       <strong>Views by platform</strong>
       <span class="sub">sum of resolved cells this month</span>
@@ -114,20 +177,22 @@
     <div id="platformChart" class="hbar-chart" role="img" aria-label="Total views per platform"></div>
   </figure>
 
-  <div class="gen-row">
+  <div class="panel gen-row">
     <label class="toggle">
       <input type="checkbox" id="commentsToggle" checked>
-      Mark estimated cells with comments <span class="sub">(untick for the sponsor-facing copy)</span>
+      <span>Mark estimated cells with comments <span class="sub">(untick for the sponsor-facing copy)</span></span>
     </label>
-    <button id="genBtn" class="primary">Generate .xlsx</button>
-    <a id="dlBtn" class="ghost" hidden download>Download report</a>
+    <div class="gen-actions">
+      <button id="genBtn" class="primary lg">Generate .xlsx</button>
+      <a id="dlBtn" class="ghost lg" hidden download>⬇ Download</a>
+    </div>
   </div>
 
-  <details class="crosscheck">
+  <details class="panel crosscheck">
     <summary>Cross-check against a reference report</summary>
-    <p class="hint">Drop last cycle's hand-made report (or the supervisor numbers) to verify RELAY cell-by-cell.</p>
-    <div class="drop slim" data-kind="reference">
-      <span class="file-name" data-empty="No reference file — click or drop"></span>
+    <p class="hint">Drop last cycle's hand-made report to verify RELAY cell-by-cell.</p>
+    <div class="drop slim" data-kind="reference" tabindex="0">
+      <span class="file-name" data-empty="Click or drop the reference .xlsx"></span>
     </div>
     <button id="ccBtn" class="ghost" disabled>Run cross-check</button>
     <div id="ccResult" hidden></div>

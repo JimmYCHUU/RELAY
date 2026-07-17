@@ -2,12 +2,36 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
 from .. import config
 
 log = logging.getLogger("relay.collectors")
+
+_SYSTEM_CHROME = (
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+)
+
+
+def _executable() -> str | None:
+    """Prefer Playwright's bundled Chromium; fall back to a system browser."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            path = pw.chromium.executable_path
+            if Path(path).exists():
+                return None  # bundled browser available — let Playwright use it
+    except Exception:
+        pass
+    for cand in _SYSTEM_CHROME:
+        if shutil.which(cand) or Path(cand).exists():
+            return cand
+    return None
 
 
 @contextmanager
@@ -24,6 +48,7 @@ def persistent_page(profile: str, headed: bool = False):
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
+            executable_path=_executable(),
             headless=not headed,
             viewport={"width": 1400, "height": 900},
             locale="en-US",
@@ -33,6 +58,24 @@ def persistent_page(profile: str, headed: bool = False):
             yield page
         finally:
             ctx.close()
+
+
+@contextmanager
+def anonymous_page():
+    """A fresh logged-out browser page — used for public X scraping (C-3:
+    no credentials, no persisted state)."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=_executable(), headless=True)
+        try:
+            yield browser.new_page(
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/126 Safari/537.36",
+                viewport={"width": 1280, "height": 900},
+            )
+        finally:
+            browser.close()
 
 
 def login_meta() -> None:

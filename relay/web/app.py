@@ -173,6 +173,66 @@ def download(run_id: str):
     )
 
 
+class CollectReq(BaseModel):
+    run_id: str
+    target: str = Field(pattern="^(x|fb)$")
+    k: float = Field(default=config.K_DEFAULT, ge=config.K_MIN, le=config.K_MAX)
+    dry_run: bool = False
+
+
+_jobs: dict[tuple[str, str], "Progress"] = {}
+
+
+@app.post("/api/collect")
+def collect(req: CollectReq) -> dict:
+    import threading
+
+    from ..collectors.base import Pacer
+    from ..collectors.runner import (Progress, collect_facebook, collect_x,
+                                     meta_profile_exists)
+
+    result = _get_run(req.run_id)
+    key = (req.run_id, req.target)
+    existing = _jobs.get(key)
+    if existing and existing.state == "running":
+        raise HTTPException(409, "collection already running for this run")
+    if req.target == "fb" and not req.dry_run and not meta_profile_exists():
+        raise HTTPException(
+            412,
+            "No Meta session found. Run `python -m relay.cli login meta` once on "
+            "this machine (a browser window opens; complete the login incl. 2FA), "
+            "then retry.",
+        )
+
+    progress = Progress()
+    _jobs[key] = progress
+
+    def work():
+        if req.target == "x":
+            pacer = Pacer(min_delay=config.X_PACE_MIN_S,
+                          max_delay=config.X_PACE_MAX_S, dry_run=req.dry_run)
+            collect_x(result, pacer=pacer, progress=progress)
+        else:
+            pacer = Pacer(dry_run=req.dry_run)
+            collect_facebook(result, req.k, pacer=pacer, progress=progress)
+
+    threading.Thread(target=work, daemon=True, name=f"collect-{req.target}").start()
+    return {"started": True, "target": req.target}
+
+
+@app.get("/api/collect/{run_id}/{target}")
+def collect_status(run_id: str, target: str) -> dict:
+    result = _get_run(run_id)
+    p = _jobs.get((run_id, target))
+    if p is None:
+        return {"state": "idle"}
+    return {
+        "state": p.state, "total": p.total, "done": p.done, "filled": p.filled,
+        "current": p.current, "message": p.message, "events": p.events[-8:],
+        "run": _serialize(run_id, result),
+    }
+
+
 class CrossReq(BaseModel):
     run_id: str
     reference: str

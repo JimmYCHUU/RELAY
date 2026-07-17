@@ -9,6 +9,8 @@ const state = {
   run: null,          // serialized run payload
   filter: "all",
   editing: null,      // {rowNo, slot}
+  collecting: null,   // "x" | "fb" while a job runs
+  freshCells: new Set(),  // "rowNo:slot" recently filled by a collector
 };
 
 const SLOT_LABELS = { fb1: "FB 1", fb2: "FB 2", fb3: "FB 3", x: "X", ig: "IG" };
@@ -182,10 +184,12 @@ function cellHtml(row, slot) {
       data-tip="${esc(provTip(c))}"></i>`;
   const conf = c.value != null && c.confidence < 0.95
     ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
-  const val = c.value != null ? fmt(c.value) : `<span class="noval">missing</span>`;
-  const editable = slot !== "x" || true;
+  const fresh = state.freshCells.has(`${row.no}:${slot}`) ? " freshly" : "";
+  const val = c.value != null
+    ? `<span class="val${fresh}">${fmt(c.value)}</span>`
+    : `<span class="noval">missing</span>`;
   return `<td class="num"><span class="cellv">${dot}${val}${conf}
-    ${editable ? `<button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Estimate or enter manually">✎</button>` : ""}
+    <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Estimate or enter manually">✎</button>
   </span></td>`;
 }
 
@@ -249,6 +253,87 @@ function recomputeCoverage() {
       ? linked.filter((r) => r.cells[slot].value != null).length / linked.length : 1;
   }
   state.run.coverage = cov;
+}
+
+/* ── collectors ──────────────────────────────────────────── */
+$("#kCollect").addEventListener("input", () => {
+  $("#kCollectOut").textContent = $("#kCollect").value;
+  $("#kLabel").textContent = $("#kCollect").value;
+});
+$("#collectX").addEventListener("click", () => startCollect("x"));
+$("#collectFB").addEventListener("click", () => startCollect("fb"));
+
+async function startCollect(target) {
+  if (state.collecting) return;
+  const body = { run_id: state.run.run_id, target, k: +$("#kCollect").value };
+  const res = await fetch("/api/collect", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const errEl = $("#collectError");
+  if (!res.ok) {
+    errEl.textContent = await errText(res);
+    errEl.hidden = false;
+    return;
+  }
+  errEl.hidden = true;
+  state.collecting = target;
+  $("#collectX").disabled = $("#collectFB").disabled = true;
+  const box = $("#collectProgress");
+  box.hidden = false;
+  $("#progressFill").style.width = "0%";
+  $("#progressText").textContent = target === "x"
+    ? "Scraping public X pages (politely paced)…"
+    : "Collecting Facebook via your Meta session…";
+  $("#progressCount").textContent = "";
+  $("#progressLog").innerHTML = "";
+  pollCollect(target);
+}
+
+async function pollCollect(target) {
+  const res = await fetch(`/api/collect/${state.run.run_id}/${target}`);
+  if (!res.ok) { finishCollect("status check failed"); return; }
+  const s = await res.json();
+  if (s.state === "idle") { setTimeout(() => pollCollect(target), 1200); return; }
+
+  if (s.run) {
+    // mark cells that newly gained a value so they pop in the table
+    for (const row of s.run.rows) {
+      const old = state.run.rows.find((r) => r.no === row.no);
+      for (const slot of Object.keys(row.cells)) {
+        if (row.cells[slot].value != null && old && old.cells[slot].value == null) {
+          state.freshCells.add(`${row.no}:${slot}`);
+        }
+      }
+    }
+    state.run = s.run;
+  }
+  const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+  $("#progressFill").style.width = pct + "%";
+  $("#progressCount").textContent = s.total ? `${s.done}/${s.total} visited · ${s.filled} filled` : "";
+  if (s.events?.length) {
+    $("#progressLog").innerHTML = s.events.slice().reverse()
+      .map((e) => `<li>${esc(e)}</li>`).join("");
+  }
+  recomputeCoverage();
+  renderReview();
+
+  if (s.state === "running") {
+    setTimeout(() => pollCollect(target), 2000);
+  } else {
+    finishCollect(s.message || s.state);
+    if (s.state === "error" || s.state === "stopped") {
+      const errEl = $("#collectError");
+      errEl.textContent = s.message;
+      errEl.hidden = false;
+    }
+  }
+}
+
+function finishCollect(message) {
+  state.collecting = null;
+  $("#collectX").disabled = $("#collectFB").disabled = false;
+  $("#progressText").textContent = message;
+  setTimeout(() => state.freshCells.clear(), 4000);
 }
 
 /* ── report stage ────────────────────────────────────────── */

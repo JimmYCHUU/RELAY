@@ -2,7 +2,7 @@ import pytest
 
 from relay.collectors.base import BudgetExceeded, ChallengeDetected, Pacer, parse_compact_number
 from relay.collectors.mbs import extract_reactions
-from relay.collectors.xpublic import extract_views_from_page, status_id
+from relay.collectors.xpublic import extract_views_from_text, status_id
 
 
 def make_pacer(**kw):
@@ -54,10 +54,10 @@ def test_parse_compact_number():
 def test_x_status_id_and_views():
     assert status_id("https://x.com/somoytv/status/2047324211?s=20") == "2047324211"
     assert status_id("https://x.com/somoytv") is None
-    html = '... "views":{"count":"12345","state":"EnabledWithCount"} ...'
-    assert extract_views_from_page(html) == 12345
-    assert extract_views_from_page("<html>auth wall</html>") is None
-    assert extract_views_from_page("57.1K Views · reposts") == 57100
+    # page body-text shapes observed live on x.com status pages
+    assert extract_views_from_text("3:12 PM · Apr 24, 2026\n157\nViews") == 157
+    assert extract_views_from_text("57.1K Views · reposts") == 57100
+    assert extract_views_from_text("log in to see more") is None
 
 
 def test_extract_reactions():
@@ -66,12 +66,16 @@ def test_extract_reactions():
     assert extract_reactions("nothing here") is None
 
 
-def test_dry_run_facebook_collect_no_browser(april_result):
-    """Dry run must never launch Playwright (import happens after the guard)."""
-    from relay.collectors.runner import collect_facebook, collect_x
+def test_dry_run_collect_no_browser(april_result):
+    """Dry run must never launch Playwright (browser import sits after the guard)."""
+    from relay.collectors.runner import Progress, collect_facebook, collect_x
     p = Pacer(dry_run=True)
-    filled = collect_facebook(april_result, k=95, pacer=p)
+    prog = Progress()
+    filled = collect_facebook(april_result, k=95, pacer=p, progress=prog)
     assert filled == 0 and p.visits > 0
+    assert prog.state == "finished" and prog.done == prog.total > 0
     p2 = Pacer(dry_run=True)
-    collect_x(april_result, pacer=p2)
+    prog2 = Progress()
+    collect_x(april_result, pacer=p2, progress=prog2)
+    assert prog2.state == "finished"
     assert all(r.cells["x"].value is None for r in april_result.rows)

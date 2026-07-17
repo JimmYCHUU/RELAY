@@ -20,7 +20,8 @@ PREFIX_MIN_LEN = 25     # min chars for truncated-title prefix matching
 K_MIN, K_MAX, K_DEFAULT = 70, 120, 95
 
 # --- collector pacing (SRS NFR-6, hard account-safety budgets) ---
-PACE_MIN_S, PACE_MAX_S = 8.0, 15.0
+PACE_MIN_S, PACE_MAX_S = 8.0, 15.0          # authenticated FB/MBS session
+X_PACE_MIN_S, X_PACE_MAX_S = 4.0, 8.0       # anonymous public X pages, no account at risk
 SESSION_NAV_BUDGET = 200
 CHALLENGE_MARKERS = ("checkpoint", "captcha", "login_attempt", "suspicious")
 
