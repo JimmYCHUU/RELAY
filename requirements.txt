@@ -1,0 +1,11 @@
+openpyxl>=3.1
+rapidfuzz>=3.6
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+pydantic>=2.6
+# collectors (optional at runtime; required to build the WITH_BROWSER image)
+playwright>=1.44
+# tests
+pytest>=8.0
+httpx>=0.27

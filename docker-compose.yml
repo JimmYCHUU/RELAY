@@ -1,0 +1,11 @@
+services:
+  relay:
+    build:
+      context: .
+      args:
+        WITH_BROWSER: "0"   # set to "1" to bake in the collector browser
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

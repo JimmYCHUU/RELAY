@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "relay-reporting"
+version = "1.0.0"
+description = "Automated sponsored-content reporting system for Somoy TV"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openpyxl>=3.1",
+    "rapidfuzz>=3.6",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+collectors = ["playwright>=1.44"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+relay = "relay.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["relay*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

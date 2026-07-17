@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RELAY — Sponsored Content Reporting</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">📡</span>
+    <div>
+      <h1>RELAY</h1>
+      <p class="tagline">Sponsored content reporting · Somoy TV</p>
+    </div>
+  </div>
+  <nav class="steps" id="stepNav">
+    <button class="step active" data-goto="inputs"><span class="step-n">1</span>Inputs</button>
+    <button class="step" data-goto="review" disabled><span class="step-n">2</span>Review</button>
+    <button class="step" data-goto="report" disabled><span class="step-n">3</span>Report</button>
+  </nav>
+</header>
+
+<main>
+<!-- ── Stage 1 · Inputs ─────────────────────────────────────── -->
+<section id="inputs" class="stage">
+  <h2>Monthly inputs</h2>
+  <p class="hint">Drop this month's files. Campaign sheet is required; matched files are optional
+     but resolve most cells automatically.</p>
+
+  <div class="drop-grid">
+    <div class="drop" data-kind="campaign">
+      <div class="drop-head"><strong>Campaign sheet</strong><span class="req">required</span></div>
+      <p>Per-brand tracker (.xlsx) — No / Date / Content / Links</p>
+      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    </div>
+    <div class="drop" data-kind="mainpage">
+      <div class="drop-head"><strong>Mainpage matched</strong><span class="opt">optional</span></div>
+      <p>Somoy News TV matched views (supervisor file)</p>
+      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    </div>
+    <div class="drop" data-kind="subpage">
+      <div class="drop-head"><strong>Subpage matched</strong><span class="opt">optional</span></div>
+      <p>Somoy Shongbad + category subpages (supervisor file)</p>
+      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    </div>
+    <div class="drop" data-kind="insta">
+      <div class="drop-head"><strong>Instagram matched</strong><span class="opt">optional</span></div>
+      <p>Instagram matched views (supervisor file)</p>
+      <span class="file-name" data-empty="No file yet — click or drop"></span>
+    </div>
+  </div>
+
+  <div class="run-row">
+    <label>Brand
+      <input id="brand" type="text" placeholder="e.g. White Plus" list="brandHints">
+      <datalist id="brandHints"></datalist>
+    </label>
+    <label>Month tab
+      <select id="sheet" disabled><option>Upload campaign first</option></select>
+    </label>
+    <button id="runBtn" class="primary" disabled>Run matching</button>
+  </div>
+  <p id="runError" class="error" hidden></p>
+</section>
+
+<!-- ── Stage 2 · Review ─────────────────────────────────────── -->
+<section id="review" class="stage" hidden>
+  <div class="section-head">
+    <h2>Match review</h2>
+    <div class="filters" role="group" aria-label="Row filter">
+      <button class="chip-filter active" data-filter="all">All rows</button>
+      <button class="chip-filter" data-filter="attention">Needs attention</button>
+    </div>
+  </div>
+  <div class="tiles" id="coverageTiles"></div>
+  <div class="legend" aria-hidden="false">
+    <span><i class="dot p-matched"></i>matched</span>
+    <span><i class="dot p-estimated"></i>estimated</span>
+    <span><i class="dot p-collected"></i>collected</span>
+    <span><i class="dot p-manual"></i>manual</span>
+    <span><i class="dot p-missing"></i>missing</span>
+  </div>
+  <div class="table-wrap">
+    <table id="reviewTable">
+      <thead>
+        <tr>
+          <th>No</th><th>Date</th><th class="cap-col">Content</th>
+          <th>FB 1 · Main</th><th>FB 2 · Shongbad</th><th>FB 3 · Subpage</th>
+          <th>X</th><th>Instagram</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div id="issues" class="issues" hidden></div>
+  <div class="run-row">
+    <button id="toReport" class="primary">Continue to report →</button>
+  </div>
+</section>
+
+<!-- ── Stage 3 · Report ─────────────────────────────────────── -->
+<section id="report" class="stage" hidden>
+  <h2>Report</h2>
+  <div class="tiles" id="reportTiles"></div>
+
+  <figure class="chart-card">
+    <figcaption>
+      <strong>Views by platform</strong>
+      <span class="sub">sum of resolved cells this month</span>
+    </figcaption>
+    <div id="platformChart" class="hbar-chart" role="img" aria-label="Total views per platform"></div>
+  </figure>
+
+  <div class="gen-row">
+    <label class="toggle">
+      <input type="checkbox" id="commentsToggle" checked>
+      Mark estimated cells with comments <span class="sub">(untick for the sponsor-facing copy)</span>
+    </label>
+    <button id="genBtn" class="primary">Generate .xlsx</button>
+    <a id="dlBtn" class="ghost" hidden download>Download report</a>
+  </div>
+
+  <details class="crosscheck">
+    <summary>Cross-check against a reference report</summary>
+    <p class="hint">Drop last cycle's hand-made report (or the supervisor numbers) to verify RELAY cell-by-cell.</p>
+    <div class="drop slim" data-kind="reference">
+      <span class="file-name" data-empty="No reference file — click or drop"></span>
+    </div>
+    <button id="ccBtn" class="ghost" disabled>Run cross-check</button>
+    <div id="ccResult" hidden></div>
+  </details>
+</section>
+</main>
+
+<!-- cell editor dialog -->
+<dialog id="cellDialog">
+  <form method="dialog">
+    <h3 id="cellTitle">Edit cell</h3>
+    <p id="cellMeta" class="hint"></p>
+    <div class="tabs">
+      <button type="button" class="tab active" data-tab="estimate">Estimate from reactions</button>
+      <button type="button" class="tab" data-tab="manual">Manual value</button>
+    </div>
+    <div class="tab-pane" data-pane="estimate">
+      <label>Reactions on the post
+        <input id="reactions" type="number" min="0" placeholder="e.g. 812">
+      </label>
+      <label>Multiplier k <output id="kOut">95</output>
+        <input id="kSlider" type="range" min="70" max="120" value="95">
+      </label>
+      <p class="hint">views ≈ reactions × k &nbsp;(your 70–120 heuristic)</p>
+    </div>
+    <div class="tab-pane" data-pane="manual" hidden>
+      <label>Views value
+        <input id="manualValue" type="number" min="0" placeholder="exact number">
+      </label>
+    </div>
+    <menu>
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="apply" id="cellApply" class="primary">Apply</button>
+    </menu>
+  </form>
+</dialog>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<input type="file" id="fileInput" accept=".xlsx" hidden>
+<script src="app.js"></script>
+</body>
+</html>
