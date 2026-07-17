@@ -13,6 +13,7 @@ from .base import Pacer, parse_compact_number
 log = logging.getLogger("relay.collectors")
 
 _REACT = re.compile(r"([\d.,]+[KMB]?)\s*(?:reactions|likes|others)", re.I)
+_VIEWS_TEXT = re.compile(r"([\d.,০-৯]+(?:\.\d+)?[KMB]?)\s*(?:views|plays)", re.I)
 
 
 def extract_reactions(html_or_text: str) -> int | None:
@@ -35,6 +36,7 @@ def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
     pacer.check_challenge(page.url, page.content()[:2000])
 
     views = None
+    source = "meta business suite"
     sel = config.SELECTORS["mbs_post_views"]
     try:
         el = page.locator(sel).first
@@ -43,11 +45,21 @@ def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
     except Exception:
         pass
 
-    reactions = extract_reactions(page.content())
+    content = page.content()
+    if views is None:
+        # Many post surfaces expose the view count in plain text ("76.4K views",
+        # Bengali digits included) — a REAL number, tried before any estimate.
+        m = _VIEWS_TEXT.search(content)
+        if m:
+            views = parse_compact_number(m.group(1))
+            source = "post page views figure"
+
+    reactions = extract_reactions(content)
     if views is not None:
-        return CellValue(views, "collected", 1.0, "meta business suite"), reactions
-    note = "no views element; reactions available for heuristic" if reactions else \
-           "no views element and no reactions found"
+        return CellValue(views, "collected", 1.0, source), reactions
+    note = ("no views figure visible to this session; reactions available for "
+            "heuristic fallback" if reactions
+            else "no views figure and no reactions found")
     return CellValue.missing(note), reactions
 
 

@@ -160,4 +160,4 @@ def collect_facebook(result: RunResult, k: float, pacer: Pacer | None = None,
 def meta_profile_exists() -> bool:
     from pathlib import Path
     prof = Path(config.PROFILE_DIR) / "meta"
-    return prof.exists() and any(prof.iterdir())
+    return (prof / ".relay-login-complete").exists()

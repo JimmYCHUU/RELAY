@@ -117,10 +117,10 @@
     <div class="card quick-actions">
       <strong>Quick Actions</strong>
       <div class="qa-row">
-        <button class="qa" data-goto-view="report">📄 Generate Report</button>
+        <button class="qa qa-primary" data-goto-view="report" data-open-cc>🛡 Data Quality Check</button>
         <button class="qa" id="qaCollectX">🐦 Collect X Views</button>
         <button class="qa" id="qaCollectFB">📘 Collect Facebook</button>
-        <button class="qa" data-goto-view="report" data-open-cc>🛡 Data Quality Check</button>
+        <button class="qa" data-goto-view="report">📄 Generate Report</button>
       </div>
     </div>
   </div>
@@ -215,8 +215,11 @@
       </div>
       <div class="collect-card">
         <div class="collect-title">📘 Facebook missing cells</div>
-        <p>Uses your saved Meta Business Suite session for real views; shared posts fall
-           back to reactions × <span id="kLabel">95</span> automatically.</p>
+        <p>First run opens a sign-in window automatically (2FA fine, done once).
+           Shared posts are resolved to the original post and read as <strong>real
+           views</strong> through your session — reactions × <span id="kLabel">95</span>
+           is only the last resort when no views figure is visible, and those cells
+           are marked ≈.</p>
         <div class="collect-fb-row">
           <button id="collectFB" class="primary">Collect Facebook</button>
           <label class="k-inline">k <input id="kCollect" type="range" min="70" max="120" value="95">

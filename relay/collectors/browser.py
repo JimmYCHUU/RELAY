@@ -81,7 +81,15 @@ def anonymous_page():
 def login_meta() -> None:
     """Open a headed browser for the user to log into Facebook/Meta Business
     Suite (2FA included). Nothing is scraped; cookies persist in the profile."""
-    with persistent_page("meta", headed=True) as page:
-        page.goto("https://business.facebook.com/")
-        log.info("Complete the login (incl. 2FA) in the opened window, then close it.")
-        page.wait_for_event("close", timeout=0)
+    try:
+        with persistent_page("meta", headed=True) as page:
+            page.goto("https://business.facebook.com/")
+            log.info("Complete the login (incl. 2FA) in the opened window, then close it.")
+            page.wait_for_event("close", timeout=0)
+    except Exception:
+        # Closing the whole browser window (the normal way) surfaces as
+        # TargetClosedError rather than a clean close event — same meaning.
+        pass
+    # Marker distinguishes "sign-in window was opened and closed" from "browser
+    # was merely launched once" — the profile dir alone can't tell those apart.
+    (Path(config.PROFILE_DIR) / "meta" / ".relay-login-complete").touch()

@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS runs (
     month TEXT NOT NULL,
     inputs TEXT NOT NULL,
     output_file TEXT,
-    status TEXT NOT NULL DEFAULT 'matched'
+    status TEXT NOT NULL DEFAULT 'matched',
+    summary TEXT
 );
 CREATE TABLE IF NOT EXISTS cells (
     run_id INTEGER NOT NULL REFERENCES runs(id),
@@ -46,15 +47,30 @@ def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
+    try:  # migrate databases created before the summary column existed
+        conn.execute("ALTER TABLE runs ADD COLUMN summary TEXT")
+    except sqlite3.OperationalError:
+        pass
     return conn
+
+
+def _summarize(result: RunResult) -> str:
+    cells = [c for r in result.rows for slot, c in r.cells.items() if r.links.get(slot)]
+    missing = sum(1 for c in cells if c.value is None)
+    estimated = sum(1 for c in cells if c.provenance == "estimated")
+    parts = [f"{len(result.rows)} rows"]
+    parts.append(f"{missing} cells flagged for review" if missing else "all cells resolved")
+    if estimated:
+        parts.append(f"{estimated} estimated (≈)")
+    return " · ".join(parts)
 
 
 def save_run(result: RunResult, inputs: dict, db_path: str | Path | None = None) -> int:
     with _connect(db_path) as conn:
         cur = conn.execute(
-            "INSERT INTO runs (created_at, brand, month, inputs) VALUES (?,?,?,?)",
+            "INSERT INTO runs (created_at, brand, month, inputs, summary) VALUES (?,?,?,?,?)",
             (datetime.now(timezone.utc).isoformat(), result.brand, result.month,
-             json.dumps(inputs)),
+             json.dumps(inputs), _summarize(result)),
         )
         run_id = cur.lastrowid
         conn.executemany(

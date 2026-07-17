@@ -173,6 +173,50 @@ def download(run_id: str):
     )
 
 
+_meta_login = {"running": False, "error": None}
+
+
+@app.post("/api/login/meta")
+def meta_login_start() -> dict:
+    """Open a headed browser on this machine for the one-time Meta sign-in.
+    Works when RELAY runs directly on the desktop (not inside Docker)."""
+    import threading
+
+    from ..collectors.runner import meta_profile_exists
+
+    if _meta_login["running"]:
+        return {"status": "running"}
+    if meta_profile_exists():
+        return {"status": "already"}
+
+    def work():
+        _meta_login.update(running=True, error=None)
+        try:
+            from ..collectors.browser import login_meta
+            login_meta()
+        except Exception as exc:  # e.g. no display inside a container
+            _meta_login["error"] = (
+                f"Could not open a browser window ({type(exc).__name__}). "
+                "If RELAY runs in Docker, run `python -m relay.cli login meta` "
+                "on the host instead — the session folder is shared."
+            )
+        finally:
+            _meta_login["running"] = False
+
+    threading.Thread(target=work, daemon=True, name="meta-login").start()
+    return {"status": "started"}
+
+
+@app.get("/api/login/meta/status")
+def meta_login_status() -> dict:
+    from ..collectors.runner import meta_profile_exists
+    return {
+        "running": _meta_login["running"],
+        "ready": (not _meta_login["running"]) and meta_profile_exists(),
+        "error": _meta_login["error"],
+    }
+
+
 class CollectReq(BaseModel):
     run_id: str
     target: str = Field(pattern="^(x|fb)$")
@@ -197,12 +241,8 @@ def collect(req: CollectReq) -> dict:
     if existing and existing.state == "running":
         raise HTTPException(409, "collection already running for this run")
     if req.target == "fb" and not req.dry_run and not meta_profile_exists():
-        raise HTTPException(
-            412,
-            "No Meta session found. Run `python -m relay.cli login meta` once on "
-            "this machine (a browser window opens; complete the login incl. 2FA), "
-            "then retry.",
-        )
+        # 412 → the dashboard auto-opens the sign-in browser via /api/login/meta
+        raise HTTPException(412, "meta-session-required")
 
     progress = Progress()
     _jobs[key] = progress

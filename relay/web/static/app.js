@@ -157,16 +157,19 @@ function slotSums() {
 }
 
 function matchStats() {
-  let matched = 0, adjusted = 0, missing = 0;
+  // verified: clean caption match, scraped real value, or a human-entered one
+  // estimated: recovered via the reactions × k heuristic — always marked ≈
+  // missing: still needs review
+  let verified = 0, estimated = 0, missing = 0;
   for (const row of state.run.rows) {
     for (const [slot, c] of Object.entries(row.cells)) {
       if (!row.links[slot]) continue;
       if (c.value == null) missing += 1;
-      else if (c.provenance === "matched" || c.provenance === "collected") matched += 1;
-      else adjusted += 1;
+      else if (c.provenance === "estimated") estimated += 1;
+      else verified += 1;
     }
   }
-  return { matched, adjusted, missing, total: matched + adjusted + missing };
+  return { verified, estimated, missing, total: verified + estimated + missing };
 }
 
 function renderDashboard() {
@@ -180,7 +183,8 @@ function renderDashboard() {
   const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
   const total = fbTotal + sums.x + sums.ig;
   const ms = matchStats();
-  const rate = ms.total ? Math.round((ms.matched + ms.adjusted) / ms.total * 100) : 0;
+  const matchRate = ms.total ? Math.round((ms.verified / ms.total) * 100) : 0;
+  const review = state.run.rows.filter(needsAttention).length;
 
   $("#greetSub").textContent =
     `Here's the ${r.brand} · ${r.month} sponsored content performance.`;
@@ -188,9 +192,10 @@ function renderDashboard() {
   $("#kpiRow").innerHTML = [
     kpi("📦", "ic-indigo", "Total Contents", String(r.rows.length), "photocards this month"),
     kpi("👁", "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
-    kpi("📘", "ic-green", "Facebook Views", fmtShort(fbTotal), "links 1–3"),
-    kpi("📸", "ic-pink", "Instagram Views", fmtShort(sums.ig), "reels & posts"),
-    kpi("𝕏", "ic-navy", "X Impressions", fmtShort(sums.x), sums.x ? "scraped, real" : "run the X collector"),
+    kpi("𝕏", "ic-navy", "X Impressions", fmtShort(sums.x),
+      sums.x ? "real, scraped from X" : "not collected yet"),
+    kpi("🎯", "ic-green", "Match Rate", `${matchRate}%`, "verified values, no estimates"),
+    kpi("⚠️", "ic-amber", "Needs Review", String(review), review === 1 ? "content row" : "content rows"),
   ].join("");
 
   renderLineChart();
@@ -293,16 +298,19 @@ function renderLineChart() {
 
 function renderPlatformSummary(sums) {
   const cov = state.run.coverage;
+  const xReal = state.run.rows.some((r) => r.cells.x.provenance === "collected");
   const rows = [
     { ic: "f", bg: "#2a78d6", name: "Facebook", sub: "Views", val: sums.fb1 + sums.fb2 + sums.fb3,
       cov: (cov.fb1 + cov.fb2 + cov.fb3) / 3 },
     { ic: "📸", bg: "#e87ba4", name: "Instagram", sub: "Views", val: sums.ig, cov: cov.ig },
-    { ic: "𝕏", bg: "#14161f", name: "X (Twitter)", sub: "Impressions", val: sums.x, cov: cov.x },
+    { ic: "𝕏", bg: "#14161f", name: "X (Twitter)", sub: "Impressions", val: sums.x, cov: cov.x,
+      badge: xReal ? { cls: "real", text: "real · scraped" } : { cls: "none", text: "not collected" } },
   ];
   $("#platformSummary").innerHTML = rows.map((r) => `
     <div class="ps-row">
       <div class="ps-ic" style="background:${r.bg}">${r.ic}</div>
-      <div class="ps-name"><strong>${r.name}</strong><span class="sub">${r.sub}</span></div>
+      <div class="ps-name"><strong>${r.name}</strong><span class="sub">${r.sub}</span>
+        ${r.badge ? `<span class="prov-badge ${r.badge.cls}">${r.badge.text}</span>` : ""}</div>
       <div style="text-align:right">
         <div class="ps-val">${fmtShort(r.val)}</div>
         <div class="ps-cov ${r.cov >= 0.85 ? "ok" : "low"}">${Math.round(r.cov * 100)}% filled</div>
@@ -311,11 +319,11 @@ function renderPlatformSummary(sums) {
 }
 
 function renderDonut(ms) {
-  const rate = ms.total ? Math.round((ms.matched + ms.adjusted) / ms.total * 100) : 0;
+  const rate = ms.total ? Math.round((ms.verified / ms.total) * 100) : 0;
   const segs = [
-    { label: "Matched", val: ms.matched, color: "var(--good)" },
-    { label: "Adjusted", val: ms.adjusted, color: "var(--warning)" },
-    { label: "Missing", val: ms.missing, color: "var(--critical)" },
+    { label: "Matched — verified value", val: ms.verified, color: "var(--good)" },
+    { label: "Estimated — reactions × k", val: ms.estimated, color: "var(--warning)" },
+    { label: "Unmatched — needs review", val: ms.missing, color: "var(--critical)" },
   ];
   const C = 2 * Math.PI * 54;
   let off = 0, arcs = "";
@@ -328,7 +336,7 @@ function renderDonut(ms) {
     off += len;
   }
   $("#donut").innerHTML = `<svg viewBox="0 0 138 138">${arcs}</svg>
-    <div class="donut-center"><div><strong>${rate}%</strong><span class="sub">Fill rate</span></div></div>`;
+    <div class="donut-center"><div><strong>${rate}%</strong><span class="sub">verified</span></div></div>`;
   $("#donutLegend").innerHTML = segs.map((s) => {
     const pct = ms.total ? ((s.val / ms.total) * 100).toFixed(1) : "0";
     return `<li><i class="dot" style="background:${s.color}"></i>${s.label}
@@ -336,15 +344,28 @@ function renderDonut(ms) {
   }).join("");
 }
 
+function rowStatus(row) {
+  const cells = Object.entries(row.cells).filter(([slot]) => row.links[slot]);
+  if (cells.some(([, c]) => c.value == null)) return "missing";
+  if (cells.some(([, c]) => c.provenance === "estimated")) return "estimated";
+  return "matched";
+}
+
 function renderTopContent() {
   const rows = state.run.rows.map((row) => ({
     row,
     total: Object.values(row.cells).reduce((a, c) => a + (c.value ?? 0), 0),
   })).sort((a, b) => b.total - a.total).slice(0, 5);
-  $("#topContent").innerHTML = rows.map((r, i) => `
+  const tips = { matched: "all values verified", estimated: "contains an estimate",
+                 missing: "has unresolved cells" };
+  $("#topContent").innerHTML = rows.map((r, i) => {
+    const st = rowStatus(r.row);
+    return `
     <li><span class="top-rank">${i + 1}</span>
+      <i class="dot p-${st}" data-tip="${tips[st]}"></i>
       <span class="top-cap" title="${esc(r.row.caption)}">${esc(r.row.caption)}</span>
-      <span class="top-val">${fmtShort(r.total)}</span></li>`).join("");
+      <span class="top-val">${fmtShort(r.total)}</span></li>`;
+  }).join("");
 }
 
 async function renderActivity() {
@@ -352,9 +373,12 @@ async function renderActivity() {
   try {
     const runs = await (await fetch("/api/runs")).json();
     items = runs.slice(0, 5).map((r) => ({
-      ic: "📄",
-      title: `${r.brand} · ${r.month} ${r.status === "generated" ? "report generated" : "matched"}`,
-      sub: r.status === "generated" ? (r.output_file || "").split("/").pop() : "matching run saved",
+      ic: r.status === "generated" ? "📄" : "🔗",
+      title: r.status === "generated"
+        ? `${r.brand} · ${r.month} — report generated`
+        : `${r.brand} · ${r.month} — supervisor files matched`,
+      sub: r.summary || (r.status === "generated"
+        ? (r.output_file || "").split("/").pop() : "matching run saved"),
       time: new Date(r.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
     }));
   } catch { /* activity is optional */ }
@@ -434,8 +458,10 @@ function cellHtml(row, slot) {
   const conf = c.value != null && c.confidence < 0.95
     ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
   const fresh = state.freshCells.has(`${row.no}:${slot}`) ? " freshly" : "";
+  // the ≈ mark travels with every heuristic value, here and in the workbook
+  const approx = c.provenance === "estimated" ? "≈" : "";
   const val = c.value != null
-    ? `<span class="val${fresh}">${fmt(c.value)}</span>`
+    ? `<span class="val${fresh}${approx ? " est" : ""}">${approx}${fmt(c.value)}</span>`
     : `<span class="noval">missing</span>`;
   return `<td class="num"><span class="cellv">${dot}${val}${conf}
     <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Estimate or enter manually">✎</button>
@@ -519,6 +545,12 @@ async function startCollect(target) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const errEl = $("#collectError");
+  if (res.status === 412) {
+    // No Meta session yet — open the sign-in browser automatically and
+    // start collecting the moment the sign-in window is closed.
+    await metaSignInThenCollect();
+    return;
+  }
   if (!res.ok) {
     errEl.textContent = await errText(res);
     errEl.hidden = false;
@@ -584,6 +616,42 @@ function finishCollect(message) {
   setTimeout(() => state.freshCells.clear(), 4000);
 }
 
+/* one-time Meta sign-in, launched straight from the Collect button */
+async function metaSignInThenCollect() {
+  const res = await fetch("/api/login/meta", { method: "POST" });
+  const errEl = $("#collectError");
+  if (!res.ok) { errEl.textContent = await errText(res); errEl.hidden = false; return; }
+  errEl.hidden = true;
+  const box = $("#collectProgress");
+  box.hidden = false;
+  $("#progressFill").style.width = "0%";
+  $("#progressCount").textContent = "";
+  $("#progressLog").innerHTML = "";
+  $("#progressText").textContent =
+    "A browser window opened on this machine — sign in to Facebook / Meta Business Suite " +
+    "(2FA is fine), then close that window. Collection starts automatically.";
+  $("#collectX").disabled = $("#collectFB").disabled = true;
+
+  const poll = async () => {
+    const s = await (await fetch("/api/login/meta/status")).json();
+    if (s.error) {
+      $("#collectX").disabled = $("#collectFB").disabled = false;
+      $("#progressText").textContent = "Sign-in did not complete.";
+      errEl.textContent = s.error;
+      errEl.hidden = false;
+      return;
+    }
+    if (s.ready) {
+      $("#collectX").disabled = $("#collectFB").disabled = false;
+      $("#progressText").textContent = "Signed in — starting Facebook collection…";
+      startCollect("fb");
+      return;
+    }
+    setTimeout(poll, 2000);
+  };
+  poll();
+}
+
 /* ═════════ report ═════════ */
 $("#toReport").addEventListener("click", () => showView("report"));
 
@@ -602,7 +670,7 @@ function renderReport() {
     tile("Total views", fmt(grand), "all platforms, resolved cells"),
     tile("Facebook", fmt(fbTotal), "links 1–3"),
     tile("Instagram", fmt(sums.ig), "views"),
-    tile("Resolved", `${ms.matched + ms.adjusted}/${ms.total}`, est ? `cells · ${est} estimated` : "cells",
+    tile("Resolved", `${ms.verified + ms.estimated}/${ms.total}`, est ? `cells · ${est} estimated` : "cells",
       ms.missing > 0),
   ].join("");
 
