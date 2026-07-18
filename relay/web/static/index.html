@@ -192,9 +192,10 @@
       <p class="hint">Supervisor-file matches are filled in. Collectors scrape the rest —
       or click any cell to fix it yourself.</p>
     </div>
-    <div class="filters" role="group" aria-label="Row filter">
-      <button class="chip-filter active" data-filter="all">All rows</button>
-      <button class="chip-filter" data-filter="attention">Needs attention</button>
+    <!-- chip-filter = app.js click hook; tabs/tab = shared segmented-control visuals -->
+    <div class="tabs" role="group" aria-label="Row filter">
+      <button class="tab chip-filter active" data-filter="all">All rows</button>
+      <button class="tab chip-filter" data-filter="attention">Needs attention</button>
     </div>
   </header>
 
@@ -239,11 +240,11 @@
   </div>
 
   <div class="legend table-legend">
-    <span><i class="dot p-matched"></i>matched</span>
-    <span><i class="dot p-collected"></i>scraped</span>
-    <span><i class="dot p-estimated"></i>estimated</span>
-    <span><i class="dot p-manual"></i>manual</span>
-    <span><i class="dot p-missing"></i>missing</span>
+    <span class="prov-chip pc-matched"><i class="dot p-matched"></i>matched</span>
+    <span class="prov-chip pc-collected"><i class="dot p-collected"></i>scraped</span>
+    <span class="prov-chip pc-estimated"><i class="dot p-estimated"></i>estimated</span>
+    <span class="prov-chip pc-manual"><i class="dot p-manual"></i>manual</span>
+    <span class="prov-chip pc-missing"><i class="dot p-missing"></i>missing</span>
   </div>
 
   <div class="table-wrap card">
