@@ -40,6 +40,15 @@ def _cell_str(v) -> str | None:
     return s or None
 
 
+def _link_str(v) -> str | None:
+    """A link column counts as a link only when it holds an actual URL —
+    the sheet's Sum/Total/Average footer rows park numbers in these columns."""
+    s = _cell_str(v)
+    if s and s.lower().startswith(("http://", "https://", "www.")):
+        return s
+    return None
+
+
 def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], list[RowIssue]]:
     wb = openpyxl.load_workbook(path, data_only=True)
     try:
@@ -60,8 +69,8 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
         for row in ws.iter_rows(min_row=header + 1, max_col=8):
             r = row[0].row
             no, date, caption = row[0].value, row[1].value, _cell_str(row[2].value)
-            links = [_cell_str(row[i].value) for i in (3, 4, 5)]
-            x_link, ig_link = _cell_str(row[6].value), _cell_str(row[7].value)
+            links = [_link_str(row[i].value) for i in (3, 4, 5)]
+            x_link, ig_link = _link_str(row[6].value), _link_str(row[7].value)
 
             if not caption and not any(links) and not x_link and not ig_link:
                 empty_run += 1
@@ -71,8 +80,12 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
             empty_run = 0
 
             if not caption:
-                issues.append(RowIssue(fname, r, "links present but caption empty — row skipped"))
-                continue
+                # a link is trackable on its own: the row stays, caption-matching
+                # is skipped, and collectors/manual entry fill the views —
+                # collectors also recover the caption from the post itself
+                issues.append(RowIssue(
+                    fname, r, "caption empty — row kept; views fill from the post links"))
+                caption = ""
 
             if isinstance(no, float):
                 no = int(no)

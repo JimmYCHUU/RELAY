@@ -44,7 +44,7 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
     """Fill X impression cells from public status pages — logged-out browser,
     no credentials ever (C-3). Returns cells filled."""
     from .browser import anonymous_page
-    from .xpublic import collect_x_views
+    from .xpublic import collect_x_views, extract_tweet_text
 
     runs = _as_runs(result)
     tag = (lambda run: f"{run.brand} · ") if len(runs) > 1 else (lambda run: "")
@@ -75,6 +75,11 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
                 url = row.links["x"]
                 p.current = url
                 cell = collect_x_views(page, url, pacer)
+                if not row.caption:
+                    cap = extract_tweet_text(page)
+                    if cap:
+                        row.caption = cap
+                        p.log(f"{tag(run)}row {row.no}: caption recovered from the post")
                 p.done += 1
                 if cell.value is not None:
                     row.cells["x"] = cell
@@ -105,7 +110,7 @@ def collect_facebook(result: RunResult | list[RunResult], k: float,
     """Fill missing FB cells via the user's Meta Business Suite session;
     shared posts fall back to reactions × k estimation automatically."""
     from .browser import persistent_page
-    from .mbs import collect_fb_post, resolve_share_link
+    from .mbs import collect_fb_post, extract_caption, resolve_share_link
 
     runs = _as_runs(result)
     tag = (lambda run: f"{run.brand} · ") if len(runs) > 1 else (lambda run: "")
@@ -144,6 +149,11 @@ def collect_facebook(result: RunResult | list[RunResult], k: float,
                     if "/share/" in url:
                         url = resolve_share_link(page, url, pacer)
                     cell, reactions = collect_fb_post(page, url, pacer)
+                    if not row.caption:
+                        cap = extract_caption(page)
+                        if cap:
+                            row.caption = cap
+                            p.log(f"{tag(run)}row {row.no}: caption recovered from the post")
                     if cell.value is not None:
                         row.cells[slot] = cell
                         filled += 1
