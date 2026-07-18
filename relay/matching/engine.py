@@ -20,6 +20,8 @@ def match_rows(campaign: list[CampaignRow], matched: list[MatchedRow]) -> list[M
         index.setdefault(k, []).append(i)
     for ci, row in enumerate(campaign):
         ck = normalize_caption(row.caption)
+        if not ck:
+            continue  # caption-less rows never caption-match; links carry them
         for mi in index.get(ck, []):
             if not taken[mi]:
                 taken[mi] = True
@@ -45,6 +47,9 @@ def match_rows(campaign: list[CampaignRow], matched: list[MatchedRow]) -> list[M
         if result[ci]:
             continue
         ck = normalize_caption(row.caption)
+        if not ck:
+            result[ci] = Match(None, "none", 0.0)
+            continue
         best_score, best_mi = 0.0, -1
         for mi, mk in enumerate(keys):
             if taken[mi]:

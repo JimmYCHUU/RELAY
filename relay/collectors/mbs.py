@@ -63,6 +63,24 @@ def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
     return CellValue.missing(note), reactions
 
 
+def extract_caption(page) -> str | None:
+    """Post caption for rows whose campaign sheet left Content empty —
+    read from the page already open, no extra navigation."""
+    try:
+        el = page.locator('meta[property="og:description"]').first
+        if el.count():
+            cap = (el.get_attribute("content") or "").strip()
+            if cap:
+                return cap[:300]
+    except Exception:
+        pass
+    try:
+        title = re.sub(r"\s*[|\-–]\s*Facebook.*$", "", (page.title() or "").strip())
+        return title[:300] or None
+    except Exception:
+        return None
+
+
 def resolve_share_link(page, url: str, pacer: Pacer) -> str:
     """Follow a facebook.com/share/p/ redirect to the canonical permalink."""
     pacer.before_visit(url)

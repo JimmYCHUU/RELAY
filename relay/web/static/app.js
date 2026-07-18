@@ -21,6 +21,7 @@ const state = {
 const SLOT_LABELS = { fb1: "FB 1", fb2: "FB 2", fb3: "FB 3", x: "X", ig: "IG" };
 const PLATFORM_LABELS = { fb1: "FB · Main", fb2: "FB · Shongbad", fb3: "FB · Subpage", x: "X / Twitter", ig: "Instagram" };
 const icon = (id) => `<svg class="ic-svg" aria-hidden="true"><use href="#${id}"/></svg>`;
+const capText = (row) => row.caption || "(no caption — see the post)";
 const fmt = (n) => n == null ? "—" : n.toLocaleString("en-US");
 const fmtShort = (n) => {
   if (n == null) return "—";
@@ -477,7 +478,7 @@ function renderTopContent() {
     return `
     <li><span class="top-rank">${i + 1}</span>
       <i class="dot p-${st}" data-tip="${tips[st]}"></i>
-      <span class="top-cap" title="${esc(r.row.caption)}">${esc(r.row.caption)}</span>
+      <span class="top-cap" title="${esc(capText(r.row))}">${esc(capText(r.row))}</span>
       <span class="top-val">${fmtShort(r.total)}</span></li>`;
   }).join("");
 }
@@ -574,7 +575,7 @@ function renderReviewRows() {
     return `<tr>
       <td class="num">${row.no}</td>
       <td class="num">${esc(date)}</td>
-      <td class="caption"><span class="cap-text" title="${esc(row.caption)}">${esc(row.caption)}</span></td>
+      <td class="caption"><span class="cap-text" title="${esc(capText(row))}">${esc(capText(row))}</span></td>
       ${["fb1", "fb2", "fb3", "x", "ig"].map((slot) => cellHtml(row, slot)).join("")}
     </tr>`;
   }).join("");
@@ -1046,7 +1047,7 @@ function renderReviewList() {
       ? new Date(row.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—";
     return `<button class="rcard${row.no === state.selectedRow ? " selected" : ""}" data-no="${row.no}">
       <span class="rcard-top"><span>№ ${row.no}</span><span>${esc(date)}</span></span>
-      <span class="rcard-cap" title="${esc(row.caption)}">${esc(row.caption)}</span>
+      <span class="rcard-cap" title="${esc(capText(row))}">${esc(capText(row))}</span>
       <span class="rcard-foot">
         <span class="prov-chip ${chipCls}">${chipLabel}</span>
         ${miniRing(filled, linked.length, st)}
@@ -1072,7 +1073,7 @@ function renderReviewDetail() {
   const date = row.date
     ? new Date(row.date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "no date";
   el.innerHTML = `
-    <h3 class="rd-cap">${esc(row.caption)}</h3>
+    <h3 class="rd-cap">${esc(capText(row))}</h3>
     <div class="rd-meta">
       <span class="sub">№ ${row.no} · ${esc(date)}</span>
       <span class="prov-chip ${chipCls}">${chipLabel}</span>

@@ -29,6 +29,18 @@ def extract_views_from_text(body_text: str) -> int | None:
     return parse_compact_number(m.group(1)) if m else None
 
 
+def extract_tweet_text(page) -> str | None:
+    """Tweet text for rows whose campaign sheet left Content empty —
+    read from the page already open, no extra navigation."""
+    try:
+        el = page.locator('div[data-testid="tweetText"]').first
+        if el.count():
+            return el.inner_text(timeout=3000).strip()[:300] or None
+    except Exception:
+        pass
+    return None
+
+
 def collect_x_views(page, url: str, pacer: Pacer) -> CellValue:
     """Read the public view count from a status page. `page` is a Playwright
     page in a logged-OUT browser context — X credentials are never used."""
