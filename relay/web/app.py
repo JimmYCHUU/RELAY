@@ -151,6 +151,108 @@ def override(req: OverrideReq) -> dict:
             "note": "manual entry"}
 
 
+class BatchCollectReq(BaseModel):
+    run_ids: list[str] = Field(min_length=1)
+    target: str = Field(pattern="^(x|fb)$")
+    k: float = Field(default=config.K_DEFAULT, ge=config.K_MIN, le=config.K_MAX)
+    dry_run: bool = False
+
+
+_batch_jobs: dict[str, "Progress"] = {}
+
+
+@app.post("/api/collect/batch")
+def collect_batch(req: BatchCollectReq) -> dict:
+    """One collection pass over every brand in the cycle — a single browser
+    session and one shared Pacer budget (safer than per-brand resets)."""
+    import threading
+
+    from ..collectors.base import Pacer
+    from ..collectors.runner import (Progress, collect_facebook, collect_x,
+                                     meta_profile_exists)
+
+    results = [_get_run(rid) for rid in req.run_ids]
+    existing = _batch_jobs.get(req.target)
+    if existing and existing.state == "running":
+        raise HTTPException(409, "collection already running for this target")
+    if req.target == "fb" and not req.dry_run and not meta_profile_exists():
+        raise HTTPException(412, "meta-session-required")
+
+    progress = Progress()
+    _batch_jobs[req.target] = progress
+
+    def work():
+        if req.target == "x":
+            pacer = Pacer(min_delay=config.X_PACE_MIN_S,
+                          max_delay=config.X_PACE_MAX_S, dry_run=req.dry_run)
+            collect_x(results, pacer=pacer, progress=progress)
+        else:
+            pacer = Pacer(dry_run=req.dry_run)
+            collect_facebook(results, req.k, pacer=pacer, progress=progress)
+
+    threading.Thread(target=work, daemon=True, name=f"collect-batch-{req.target}").start()
+    return {"started": True, "target": req.target, "runs": len(results)}
+
+
+@app.get("/api/collect/batch/{target}")
+def collect_batch_status(target: str, ids: str = "") -> dict:
+    id_list = [i for i in ids.split(",") if i]
+    runs = {rid: _serialize(rid, _get_run(rid)) for rid in id_list}
+    p = _batch_jobs.get(target)
+    if p is None:
+        return {"state": "idle", "runs": runs}
+    return {
+        "state": p.state, "total": p.total, "done": p.done, "filled": p.filled,
+        "current": p.current, "message": p.message, "events": p.events[-8:],
+        "runs": runs,
+    }
+
+
+@app.post("/api/collect/batch/{target}/stop")
+def collect_batch_stop(target: str) -> dict:
+    p = _batch_jobs.get(target)
+    if p is None or p.state != "running":
+        return {"stopping": False}
+    p.stop_requested = True
+    return {"stopping": True}
+
+
+class BatchReportReq(BaseModel):
+    run_ids: list[str] = Field(min_length=1)
+    comments: bool = True
+
+
+@app.post("/api/report/batch")
+def generate_batch(req: BatchReportReq) -> dict:
+    """One workbook per brand (sponsors never see each other's numbers),
+    bundled into a zip for the user."""
+    import zipfile
+
+    results = [_get_run(rid) for rid in req.run_ids]
+    paths = []
+    for rid, result in zip(req.run_ids, results):
+        out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
+        build_report(result, out, estimate_comments=req.comments)
+        store.set_output(_run_db_ids[rid], str(out))
+        paths.append(out)
+    month = results[0].month
+    zpath = config.OUTPUT_DIR / f"RELAY reports ({month}).zip"
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in paths:
+            z.write(f, arcname=f.name)
+    return {"name": zpath.name, "workbooks": [p.name for p in paths]}
+
+
+@app.get("/api/report/batch/download/{name}")
+def download_batch(name: str):
+    if "/" in name or ".." in name or not name.endswith(".zip"):
+        raise HTTPException(400, "bad archive name")
+    path = config.OUTPUT_DIR / name
+    if not path.exists():
+        raise HTTPException(404, "archive not generated yet")
+    return FileResponse(path, media_type="application/zip", filename=name)
+
+
 @app.post("/api/report/{run_id}")
 def generate(run_id: str, comments: bool = True) -> dict:
     result = _get_run(run_id)

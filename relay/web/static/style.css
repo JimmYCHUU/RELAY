@@ -268,12 +268,18 @@ input:disabled, select:disabled {
 }
 .ctab:hover { color: var(--ink); background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
 .ctab.active:hover { background: var(--surface); }
-.ctab .count {
+.ctab .count, .tab .count {
   font-size: 11.5px; font-weight: 700; color: var(--ink-2);
   background: var(--surface-2); border: 1px solid var(--grid);
   border-radius: 999px; padding: 1px 8px; margin-left: 4px;
 }
-.ctab .count:empty { display: none; }
+.tab .count { background: var(--surface); }
+.ctab .count:empty, .tab .count:empty { display: none; }
+.tab.active .count { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+/* many brands → the tab row scrolls, it never wraps */
+.tabbar { overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+.tabbar::-webkit-scrollbar { display: none; }
+.ctab { white-space: nowrap; flex-shrink: 0; }
 .ctab.active {
   background: var(--surface); border-color: var(--grid); color: var(--ink);
   margin-bottom: -1px;
@@ -299,6 +305,32 @@ input:disabled, select:disabled {
   background: var(--surface); border: 1px solid var(--grid); border-radius: 14px;
   box-shadow: var(--shadow); min-height: 380px; overflow: hidden;
 }
+.panel-toolbar {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 14px; border-bottom: 1px solid var(--grid);
+}
+.seg-filter { display: inline-flex; }
+.seg-filter .tab { flex: none; }
+.brand-panel {
+  background: var(--surface); border: 1px solid var(--grid); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 18px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.brand-panel .tiles, .brand-panel .chart-card, .brand-panel .gen-row,
+.brand-panel .crosscheck { margin: 0; }
+.brand-panel .card { background: var(--surface); }
+.cycle-list { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.cycle-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--accent-soft); color: var(--accent);
+  font-weight: 650; font-size: 13px; border-radius: 999px; padding: 6px 6px 6px 14px;
+}
+.cycle-chip .sub { color: inherit; opacity: .75; display: inline; margin-left: 4px; }
+.cycle-chip button {
+  padding: 2px 8px; background: none; border: none; color: inherit;
+  font-size: 14px; border-radius: 999px;
+}
+.cycle-chip button:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 
 /* ═════════ master–detail review ═════════ */
 .review-split { display: grid; grid-template-columns: 330px minmax(0, 1fr); }

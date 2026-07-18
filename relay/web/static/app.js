@@ -6,7 +6,10 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const state = {
   files: {},          // kind -> {path, name, sheets?}
-  run: null,          // serialized run payload
+  pending: [],        // brands staged for this cycle: {campaign, brand, sheet}
+  runs: [],           // every brand's run in the cycle
+  run: null,          // the ACTIVE run — all per-brand renderers read this
+  dashSel: "all",     // dashboard scope: "all" | run index
   filter: "all",
   reviewMode: "list", // "list" (master-detail) | "table"
   selectedRow: null,  // row.no highlighted in the list
@@ -102,7 +105,12 @@ async function uploadFile(kind, file) {
     guessBrand(data.name);
   }
   if (kind === "reference") $("#ccBtn").disabled = false;
-  $("#runBtn").disabled = !state.files.campaign;
+  updateRunButtons();
+}
+
+function updateRunButtons() {
+  $("#addBrandBtn").disabled = !state.files.campaign;
+  $("#runBtn").disabled = !(state.files.campaign || state.pending.length);
 }
 
 function guessBrand(filename) {
@@ -113,29 +121,84 @@ function guessBrand(filename) {
   if (!$("#brand").value && guess) $("#brand").value = guess;
 }
 
-/* ═════════ run ═════════ */
-$("#runBtn").addEventListener("click", async () => {
-  const body = {
-    campaign: state.files.campaign.path,
-    sheet: $("#sheet").value,
+/* ═════════ cycle staging & run ═════════ */
+function stageBrand() {
+  if (!state.files.campaign) return;
+  state.pending.push({
+    campaign: state.files.campaign,
     brand: $("#brand").value.trim() || "SPONSOR",
+    sheet: $("#sheet").value,
+  });
+  state.files.campaign = null;
+  const zone = $('.drop[data-kind="campaign"]');
+  zone.classList.remove("filled");
+  $(".file-name", zone).textContent = "";
+  const sel = $("#sheet");
+  sel.innerHTML = "<option>Upload campaign first</option>";
+  sel.disabled = true;
+  $("#brand").value = "";
+  renderCycleList();
+  updateRunButtons();
+}
+$("#addBrandBtn").addEventListener("click", stageBrand);
+
+function renderCycleList() {
+  const el = $("#cycleList");
+  el.hidden = !state.pending.length;
+  el.innerHTML = state.pending.map((p, i) => `
+    <span class="cycle-chip">${esc(p.brand)}<span class="sub">· ${esc(p.sheet)}</span>
+      <button data-i="${i}" title="Remove ${esc(p.brand)}">✕</button></span>`).join("");
+}
+$("#cycleList").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-i]");
+  if (!b) return;
+  state.pending.splice(+b.dataset.i, 1);
+  renderCycleList();
+  updateRunButtons();
+});
+
+function cycleLabel() {
+  if (!state.runs.length) return "No month loaded";
+  const month = state.runs[0].month;
+  return state.runs.length > 1
+    ? `${state.runs.length} brands · ${month}`
+    : `${state.runs[0].brand} · ${month}`;
+}
+
+$("#runBtn").addEventListener("click", async () => {
+  if (state.files.campaign) stageBrand();  // single-brand flow needs no Add click
+  if (!state.pending.length) return;
+  const shared = {
     mainpage: state.files.mainpage?.path ?? null,
     subpage: state.files.subpage?.path ?? null,
     insta: state.files.insta?.path ?? null,
   };
+  const batch = state.pending;
   $("#runBtn").disabled = true;
-  $("#runBtn").textContent = "Matching…";
   try {
-    const res = await fetch("/api/run", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(await errText(res));
-    state.run = await res.json();
+    const runs = [];
+    for (const [i, p] of batch.entries()) {
+      $("#runBtn").textContent = batch.length > 1
+        ? `Matching ${p.brand} (${i + 1}/${batch.length})…` : "Matching…";
+      const res = await fetch("/api/run", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign: p.campaign.path, sheet: p.sheet, brand: p.brand, ...shared }),
+      });
+      if (!res.ok) throw new Error(`${p.brand}: ${await errText(res)}`);
+      runs.push(await res.json());
+    }
+    state.runs = runs;
+    state.run = runs[0];
+    state.pending = [];
+    state.selectedRow = null;
+    state.dashSel = "all";
+    renderCycleList();
     unlockViews();
     $("#exportBtn").disabled = false;
-    $("#rangeText").textContent = `${state.run.brand} · ${state.run.month}`;
-    $("#syncTitle").textContent = `${state.run.brand} · ${state.run.month}`;
-    $("#syncSub").textContent = `${state.run.rows.length} content rows loaded`;
+    $("#rangeText").textContent = cycleLabel();
+    $("#syncTitle").textContent = cycleLabel();
+    $("#syncSub").textContent =
+      `${runs.reduce((a, r) => a + r.rows.length, 0)} content rows loaded`;
     renderReview();
     showView("review");
   } catch (e) {
@@ -143,6 +206,7 @@ $("#runBtn").addEventListener("click", async () => {
   } finally {
     $("#runBtn").disabled = false;
     $("#runBtn").textContent = "Run matching →";
+    updateRunButtons();
   }
 });
 $("#newRunBtn").addEventListener("click", () => showView("inputs"));
@@ -184,37 +248,75 @@ function matchStats() {
   return { verified, estimated, missing, total: verified + estimated + missing };
 }
 
+function mergedRun() {
+  const rows = state.runs.flatMap((r) => r.rows);
+  const cov = {};
+  for (const slot of ["fb1", "fb2", "fb3", "x", "ig"]) {
+    const linked = rows.filter((r) => r.links[slot]);
+    cov[slot] = linked.length
+      ? linked.filter((r) => r.cells[slot].value != null).length / linked.length : 1;
+  }
+  return { run_id: "__all__", brand: "All brands", month: state.runs[0].month,
+           rows, coverage: cov, issues: state.runs.flatMap((r) => r.issues) };
+}
+
+function renderDashSeg() {
+  const el = $("#dashBrandSeg");
+  el.hidden = state.runs.length < 2;
+  if (el.hidden) return;
+  const opts = [["all", "All brands"], ...state.runs.map((r, i) => [String(i), r.brand])];
+  el.innerHTML = opts.map(([v, label]) =>
+    `<button class="tab${String(state.dashSel) === v ? " active" : ""}" data-sel="${v}">${esc(label)}</button>`).join("");
+}
+$("#dashBrandSeg").addEventListener("click", (e) => {
+  const b = e.target.closest(".tab");
+  if (!b) return;
+  state.dashSel = b.dataset.sel === "all" ? "all" : +b.dataset.sel;
+  renderDashboard();
+});
+
 function renderDashboard() {
   const has = !!state.run;
   $("#dashEmpty").hidden = has;
   $("#dashBody").hidden = !has;
   if (!has) return;
+  renderDashSeg();
 
-  const r = state.run;
-  const sums = slotSums();
-  const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
-  const total = fbTotal + sums.x + sums.ig;
-  const ms = matchStats();
-  const matchRate = ms.total ? Math.round((ms.verified / ms.total) * 100) : 0;
-  const review = state.run.rows.filter(needsAttention).length;
+  // every dashboard renderer reads state.run — swap in the dashboard's scope
+  // (one brand or the "All brands" merge), render, restore
+  const prev = state.run;
+  if (state.runs.length > 1) {
+    state.run = state.dashSel === "all" ? mergedRun() : (state.runs[state.dashSel] || prev);
+  }
+  try {
+    const r = state.run;
+    const sums = slotSums();
+    const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
+    const total = fbTotal + sums.x + sums.ig;
+    const ms = matchStats();
+    const matchRate = ms.total ? Math.round((ms.verified / ms.total) * 100) : 0;
+    const review = state.run.rows.filter(needsAttention).length;
 
-  $("#greetSub").textContent =
-    `Here's the ${r.brand} · ${r.month} sponsored content performance.`;
+    $("#greetSub").textContent =
+      `Here's the ${r.brand} · ${r.month} sponsored content performance.`;
 
-  $("#kpiRow").innerHTML = [
-    kpi(icon("i-package"), "ic-indigo", "Total Contents", String(r.rows.length), "photocards this month"),
-    kpi(icon("i-eye"), "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
-    kpi(icon("i-x"), "ic-navy", "X Impressions", fmtShort(sums.x),
-      sums.x ? "real, scraped from X" : "not collected yet"),
-    kpi(icon("i-target"), "ic-green", "Match Rate", `${matchRate}%`, "verified values, no estimates"),
-    kpi(icon("i-alert"), "ic-amber", "Needs Review", String(review), review === 1 ? "content row" : "content rows"),
-  ].join("");
+    $("#kpiRow").innerHTML = [
+      kpi(icon("i-package"), "ic-indigo", "Total Contents", String(r.rows.length), "photocards this month"),
+      kpi(icon("i-eye"), "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
+      kpi(icon("i-x"), "ic-navy", "X Impressions", fmtShort(sums.x),
+        sums.x ? "real, scraped from X" : "not collected yet"),
+      kpi(icon("i-target"), "ic-green", "Match Rate", `${matchRate}%`, "verified values, no estimates"),
+      kpi(icon("i-alert"), "ic-amber", "Needs Review", String(review), review === 1 ? "content row" : "content rows"),
+    ].join("");
 
-  renderLineChart();
-  renderPlatformSummary(sums);
-  renderDonut(ms);
-  renderTopContent();
-  renderActivity();
+    renderLineChart();
+    renderPlatformSummary(sums);
+    renderDonut(ms);
+    renderTopContent();
+    renderActivity();
+  } finally {
+    state.run = prev;
+  }
 }
 
 function kpi(icon, cls, label, value, extra) {
@@ -419,7 +521,25 @@ function needsAttention(row) {
     (c.value != null && c.confidence < 0.95));
 }
 
+/* one tab per brand — the workspace switcher (Phase 8); count = needs attention */
+function renderBrandTabs(sel, onSwitch) {
+  const el = $(sel);
+  el.innerHTML = state.runs.map((r, i) => `
+    <button class="ctab${r === state.run ? " active" : ""}" role="tab"
+      aria-selected="${r === state.run}" data-run="${i}">
+      ${esc(r.brand)} <span class="count">${r.rows.filter(needsAttention).length || ""}</span>
+    </button>`).join("");
+  el.onclick = (e) => {
+    const b = e.target.closest(".ctab");
+    if (!b || state.runs[+b.dataset.run] === state.run) return;
+    state.run = state.runs[+b.dataset.run];
+    state.selectedRow = null;
+    onSwitch();
+  };
+}
+
 function renderReview() {
+  renderBrandTabs("#brandTabs", renderReview);
   const r = state.run;
   const tiles = [];
   for (const [slot, frac] of Object.entries(r.coverage)) {
@@ -469,7 +589,7 @@ function cellHtml(row, slot) {
       data-tip="${esc(provTip(c))}"></i>`;
   const conf = c.value != null && c.confidence < 0.95
     ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
-  const fresh = state.freshCells.has(`${row.no}:${slot}`) ? " freshly" : "";
+  const fresh = state.freshCells.has(`${state.run.run_id}:${row.no}:${slot}`) ? " freshly" : "";
   // the ≈ mark travels with every heuristic value, here and in the workbook
   const approx = c.provenance === "estimated" ? "≈" : "";
   const val = c.value != null
@@ -588,9 +708,11 @@ function puEls(target) {
 }
 
 async function startCollect(target) {
-  if (!state.run || state.collecting[target]) return;
-  const body = { run_id: state.run.run_id, target, k: +$("#kCollect").value };
-  const res = await fetch("/api/collect", {
+  if (!state.runs.length || state.collecting[target]) return;
+  // always the batch endpoint: one browser session and one shared Pacer
+  // budget across every brand in the cycle
+  const body = { run_ids: state.runs.map((r) => r.run_id), target, k: +$("#kCollect").value };
+  const res = await fetch("/api/collect/batch", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const errEl = $("#collectError");
@@ -624,22 +746,28 @@ async function startCollect(target) {
 
 async function pollCollect(target) {
   const el = puEls(target);
-  const res = await fetch(`/api/collect/${state.run.run_id}/${target}`);
+  const ids = state.runs.map((r) => r.run_id).join(",");
+  const res = await fetch(`/api/collect/batch/${target}?ids=${ids}`);
   if (!res.ok) { finishCollect(target, "status check failed"); return; }
   const s = await res.json();
   if (s.state === "idle") { setTimeout(() => pollCollect(target), 1200); return; }
 
-  if (s.run) {
-    for (const row of s.run.rows) {
-      const old = state.run.rows.find((r) => r.no === row.no);
-      for (const slot of Object.keys(row.cells)) {
-        if (row.cells[slot].value != null && old && old.cells[slot].value == null) {
-          state.freshCells.add(`${row.no}:${slot}`);
+  if (s.runs) {
+    const activeId = state.run.run_id;
+    state.runs = state.runs.map((old) => {
+      const fresh = s.runs[old.run_id];
+      if (!fresh) return old;
+      for (const row of fresh.rows) {
+        const oldRow = old.rows.find((r) => r.no === row.no);
+        for (const slot of Object.keys(row.cells)) {
+          if (row.cells[slot].value != null && oldRow && oldRow.cells[slot].value == null) {
+            state.freshCells.add(`${fresh.run_id}:${row.no}:${slot}`);
+          }
         }
       }
-    }
-    // both pollers merge into state.run; each only adds cells its collector filled
-    state.run = s.run;
+      return fresh;
+    });
+    state.run = state.runs.find((r) => r.run_id === activeId) || state.runs[0];
   }
   const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
   el.fill.style.width = pct + "%";
@@ -674,10 +802,10 @@ function finishCollect(target, message) {
 
 $$(".pu-stop").forEach((b) => b.addEventListener("click", async () => {
   const target = b.dataset.target;
-  if (!state.run || !state.collecting[target]) return;
+  if (!state.collecting[target]) return;
   b.disabled = true;
   puEls(target).text.textContent = "Stopping after the current post…";
-  await fetch(`/api/collect/${state.run.run_id}/${target}/stop`, { method: "POST" });
+  await fetch(`/api/collect/batch/${target}/stop`, { method: "POST" });
 }));
 
 /* one-time Meta sign-in, launched straight from the Collect button */
@@ -723,6 +851,9 @@ $("#toReport").addEventListener("click", () => showView("report"));
 
 function renderReport() {
   if (!state.run) return;
+  renderBrandTabs("#brandTabsReport", renderReport);
+  $("#genAllBtn").hidden = state.runs.length < 2;
+  if (state.runs.length < 2) $("#dlAllBtn").hidden = true;
   const r = state.run;
   const sums = slotSums();
   const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
@@ -769,6 +900,20 @@ $("#genBtn").addEventListener("click", async () => {
   dl.hidden = false;
   dl.href = `/api/report/${state.run.run_id}/download`;
   $("#dlText").textContent = `Download ${data.name}`;
+});
+
+$("#genAllBtn").addEventListener("click", async () => {
+  const res = await fetch("/api/report/batch", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_ids: state.runs.map((r) => r.run_id),
+                           comments: $("#commentsToggle").checked }),
+  });
+  if (!res.ok) { showError(await errText(res)); return; }
+  const data = await res.json();
+  const dl = $("#dlAllBtn");
+  dl.hidden = false;
+  dl.href = `/api/report/batch/download/${encodeURIComponent(data.name)}`;
+  $("#dlAllText").textContent = `Download ${data.name}`;
 });
 
 /* ═════════ cross-check ═════════ */
@@ -949,7 +1094,7 @@ function slotRowHtml(row, slot) {
   const dot = `<i class="dot p-${c.value == null ? "missing" : c.provenance}" data-tip="${esc(provTip(c))}"></i>`;
   const conf = c.value != null && c.confidence < 0.95
     ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
-  const fresh = state.freshCells.has(`${row.no}:${slot}`) ? " freshly" : "";
+  const fresh = state.freshCells.has(`${state.run.run_id}:${row.no}:${slot}`) ? " freshly" : "";
   const approx = c.provenance === "estimated" ? "≈" : "";
   const val = c.value != null
     ? `<span class="val${fresh}${approx ? " est" : ""}">${approx}${fmt(c.value)}</span>`
