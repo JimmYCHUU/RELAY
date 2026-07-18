@@ -22,6 +22,7 @@ class Progress:
     current: str = ""
     state: str = "running"           # running | finished | stopped | error
     message: str = ""
+    stop_requested: bool = False     # set by the dashboard's Stop button
     events: list[str] = field(default_factory=list)
 
     def log(self, line: str) -> None:
@@ -61,6 +62,8 @@ def collect_x(result: RunResult, pacer: Pacer | None = None,
     try:
         with anonymous_page() as page:
             for row in targets:
+                if p.stop_requested:
+                    break
                 url = row.links["x"]
                 p.current = url
                 cell = collect_x_views(page, url, pacer)
@@ -79,8 +82,11 @@ def collect_x(result: RunResult, pacer: Pacer | None = None,
         log.exception("x collection aborted")
         p.state, p.message = "error", f"{type(exc).__name__}: {exc}"
         return filled
-    p.state = "finished"
-    p.message = f"filled {filled} of {p.total} X cells"
+    if p.stop_requested:
+        p.state, p.message = "stopped", f"stopped — filled {filled} of {p.done} visited"
+    else:
+        p.state = "finished"
+        p.message = f"filled {filled} of {p.total} X cells"
     return filled
 
 
@@ -118,6 +124,8 @@ def collect_facebook(result: RunResult, k: float, pacer: Pacer | None = None,
     try:
         with persistent_page("meta", headed=headed) as page:
             for row, slot in targets:
+                if p.stop_requested:
+                    break
                 url = row.links[slot]
                 p.current = url
                 try:
@@ -152,8 +160,11 @@ def collect_facebook(result: RunResult, k: float, pacer: Pacer | None = None,
         log.exception("fb collection aborted")
         p.state, p.message = "error", f"{type(exc).__name__}: {exc}"
         return filled
-    p.state = "finished"
-    p.message = f"filled {filled} of {p.total} Facebook cells"
+    if p.stop_requested:
+        p.state, p.message = "stopped", f"stopped — filled {filled} of {p.done} visited"
+    else:
+        p.state = "finished"
+        p.message = f"filled {filled} of {p.total} Facebook cells"
     return filled
 
 

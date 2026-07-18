@@ -6,65 +6,101 @@
 <title>RELAY — Sponsored Content Reporting</title>
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%234353e8'/><path d='M30 72V28h22a14 14 0 0 1 0 28H41l17 16h-15L30 60' fill='white'/></svg>">
+<script>
+/* theme before first paint — light is the product default, dark is a choice */
+document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || "light";
+</script>
 </head>
 <body>
-<div class="shell">
+<!-- stroke icon set — one visual language for every icon; consumed via <use href="#i-…"> -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm8 1v5h5"/></symbol>
+  <symbol id="i-lines" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10m5.4 10V4m5.3 16v-7m5.3 7V8"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5V5M12 19v2.5M2.5 12H5m14 0h2.5M5.3 5.3l1.8 1.8m9.8 9.8 1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="5.5" rx="1.5"/><rect x="4" y="13.5" width="16" height="5.5" rx="1.5"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 10h17M9.5 10v9.5M15.5 10v9.5"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="M21 8.2v7.6a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 15.8V8.2a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4a2 2 0 0 1 1 1.73z"/><path d="M3.3 7.3 12 12.3l8.7-5M12 21.8V12.3"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M4.5 4.5h4.2l10.8 15h-4.2z"/><path d="M4.7 19.5 10.5 13M13.4 10.7l5.7-6.2"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.7"/><circle cx="12" cy="12" r="1"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 4 2.6 17.5A1.9 1.9 0 0 0 4.2 20.5h15.6a1.9 1.9 0 0 0 1.6-3L13.7 4a1.9 1.9 0 0 0-3.4 0z"/><path d="M12 9.5V14M12 17.2v.1"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M8 3v4M16 3v4M3 10.5h18"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0 4.5-4.5M12 15 7.5 10.5M4 19.5h16"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3.5h6V5M9 11h6M9 15h6M9 18h3.5"/></symbol>
+  <symbol id="i-news" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8.5h10M7 12h10M7 15.5h6"/></symbol>
+  <symbol id="i-pages" viewBox="0 0 24 24"><rect x="7" y="3" width="14" height="14" rx="2"/><path d="M17 21H5a2 2 0 0 1-2-2V7"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4.5 7H7l2-2.5h6L17 7h2.5A1.5 1.5 0 0 1 21 8.5V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8.5A1.5 1.5 0 0 1 4.5 7z"/><circle cx="12" cy="13" r="3.8"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"/></symbol>
+  <symbol id="i-facebook" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M15.5 4h-2A3.5 3.5 0 0 0 10 7.5V10H7.5v3H10v7h3v-7h2.4l.6-3H13V8a1 1 0 0 1 1-1h1.5z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 5.5v6.1c0 4.3 3 7.5 7 8.9 4-1.4 7-4.6 7-8.9V5.5z"/><path d="m9.2 12 2 2 3.6-3.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v4h4M8.5 13h7M8.5 17h5"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7"/><path d="M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></symbol>
+</svg>
 
-<!-- ═════════ Sidebar ═════════ -->
-<aside class="sidebar">
-  <div class="logo">
-    <span class="logo-mark">R</span>
-    <span class="logo-word">RELAY</span>
-  </div>
+<div class="app">
 
-  <nav class="nav">
-    <button class="nav-item active" data-view="dashboard">
-      <svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
-      Dashboard</button>
-    <button class="nav-item" data-view="inputs">
-      <svg viewBox="0 0 24 24"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm8 1v5h5"/></svg>
-      Data Sources</button>
-    <button class="nav-item" data-view="review" data-locked>
-      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-      Match Review</button>
-    <button class="nav-item" data-view="report" data-locked>
-      <svg viewBox="0 0 24 24"><path d="M5 20V10m5 10V4m5 16v-7m5 7V8"/></svg>
-      Reports</button>
+<!-- ═════════ icon rail ═════════ -->
+<aside class="rail">
+  <a class="rail-logo" href="/" aria-label="RELAY">R</a>
+  <nav class="rail-nav">
+    <button class="nav-item active" data-view="dashboard" title="Dashboard" aria-label="Dashboard">
+      <svg class="ic-svg"><use href="#i-home"/></svg></button>
+    <button class="nav-item" data-view="inputs" title="Data Sources" aria-label="Data Sources">
+      <svg class="ic-svg"><use href="#i-file"/></svg></button>
+    <button class="nav-item" data-view="review" data-locked title="Match Review" aria-label="Match Review">
+      <svg class="ic-svg"><use href="#i-lines"/></svg></button>
+    <button class="nav-item" data-view="report" data-locked title="Reports" aria-label="Reports">
+      <svg class="ic-svg"><use href="#i-chart"/></svg></button>
+    <button class="nav-item" data-view="accounts" title="Accounts" aria-label="Accounts">
+      <svg class="ic-svg"><use href="#i-user"/></svg></button>
   </nav>
-
-  <div class="sidebar-card" id="syncCard">
-    <div class="sync-row"><span class="spin-ic">↻</span><div>
-      <strong id="syncTitle">No run yet</strong>
-      <span class="sub" id="syncSub">Upload this month's files</span>
-    </div></div>
-    <div class="sync-status"><span class="status-dot"></span>All systems operational</div>
-  </div>
-
-  <div class="sidebar-foot">
-    <div class="avatar">A</div>
-    <div><strong>Asaj Ibtisam</strong><span class="sub">Platform Management</span></div>
+  <div class="rail-foot">
+    <div class="avatar" title="Asaj Ibtisam — Platform Management">A</div>
   </div>
 </aside>
 
-<!-- ═════════ Main ═════════ -->
-<div class="appmain">
+<!-- ═════════ main panel ═════════ -->
+<div class="panel">
+
+<header class="topbar">
+  <div class="tb-left">
+    <h1 class="tb-title" id="tbTitle">Dashboard</h1>
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <span>RELAY</span><span class="crumb-sep">›</span>
+      <span id="crumbView">Dashboard</span><span class="crumb-sep">›</span>
+      <span class="crumb-status"><span class="status-dot"></span><span id="syncTitle">No run yet</span></span>
+      <span id="syncSub" class="sr-only">Upload this month's files</span>
+    </nav>
+  </div>
+  <div class="head-actions">
+    <button class="iconbtn" id="themeBtn" title="Switch theme" aria-label="Switch theme">
+      <svg class="ic-svg"><use href="#i-moon"/></svg></button>
+    <span class="range-pill" id="rangePill"><svg class="ic-svg"><use href="#i-calendar"/></svg><span id="rangeText">No month loaded</span></span>
+    <button class="ghost" id="exportBtn" disabled><svg class="ic-svg"><use href="#i-download"/></svg> Export Report</button>
+    <button class="primary" id="newRunBtn"><svg class="ic-svg"><use href="#i-plus"/></svg> New Run</button>
+  </div>
+</header>
+
+<main class="content">
 
 <!-- ── Dashboard ── -->
 <section id="view-dashboard" class="view">
-  <header class="page-head">
+  <header class="view-head">
     <div>
-      <h1 id="greeting">Good morning 👋</h1>
+      <h2 class="greet" id="greeting">Good morning 👋</h2>
       <p class="hint" id="greetSub">Here's an overview of your sponsored content performance.</p>
-    </div>
-    <div class="head-actions">
-      <span class="range-pill" id="rangePill">📅 No month loaded</span>
-      <button class="ghost" id="exportBtn" disabled>⬇ Export Report</button>
-      <button class="primary" id="newRunBtn">＋ New Run</button>
     </div>
   </header>
 
   <div id="dashEmpty" class="empty-state">
-    <div class="empty-icon">📊</div>
+    <div class="empty-icon"><svg class="ic-svg"><use href="#i-chart"/></svg></div>
     <h2>No data yet this session</h2>
     <p class="hint">Load a month in <strong>Data Sources</strong> — the dashboard fills itself from the run.</p>
     <button class="primary lg" data-goto-view="inputs">Go to Data Sources →</button>
@@ -117,10 +153,10 @@
     <div class="card quick-actions">
       <strong>Quick Actions</strong>
       <div class="qa-row">
-        <button class="qa qa-primary" data-goto-view="report" data-open-cc>🛡 Data Quality Check</button>
-        <button class="qa" id="qaCollectX">🐦 Collect X Views</button>
-        <button class="qa" id="qaCollectFB">📘 Collect Facebook</button>
-        <button class="qa" data-goto-view="report">📄 Generate Report</button>
+        <button class="qa qa-primary" data-goto-view="report" data-open-cc><svg class="ic-svg"><use href="#i-shield"/></svg> Data Quality Check</button>
+        <button class="qa" id="qaCollectX"><svg class="ic-svg"><use href="#i-x"/></svg> Collect X Views</button>
+        <button class="qa" id="qaCollectFB"><svg class="ic-svg"><use href="#i-facebook"/></svg> Collect Facebook</button>
+        <button class="qa" data-goto-view="report"><svg class="ic-svg"><use href="#i-doc"/></svg> Generate Report</button>
       </div>
     </div>
   </div>
@@ -128,17 +164,14 @@
 
 <!-- ── Data Sources (inputs) ── -->
 <section id="view-inputs" class="view" hidden>
-  <header class="page-head">
-    <div>
-      <h1>Data Sources</h1>
-      <p class="hint">Drop this month's files. Only the campaign sheet is required — supervisor
-      files pre-fill most cells, collectors scrape the rest.</p>
-    </div>
+  <header class="view-head">
+    <p class="hint">Drop this month's files. Only the campaign sheet is required — supervisor
+    files pre-fill most cells, collectors scrape the rest.</p>
   </header>
 
   <div class="drop-grid">
     <div class="drop" data-kind="campaign" tabindex="0">
-      <div class="drop-icon ic-indigo">📋</div>
+      <div class="drop-icon ic-indigo"><svg class="ic-svg"><use href="#i-clipboard"/></svg></div>
       <div class="drop-body">
         <div class="drop-head"><strong>Campaign sheet</strong><span class="req">required</span></div>
         <p>Per-brand tracker — No / Date / Content / Links</p>
@@ -146,7 +179,7 @@
       </div>
     </div>
     <div class="drop" data-kind="mainpage" tabindex="0">
-      <div class="drop-icon ic-blue">📰</div>
+      <div class="drop-icon ic-blue"><svg class="ic-svg"><use href="#i-news"/></svg></div>
       <div class="drop-body">
         <div class="drop-head"><strong>Mainpage matched</strong><span class="opt">optional</span></div>
         <p>Somoy News TV views (supervisor file)</p>
@@ -154,7 +187,7 @@
       </div>
     </div>
     <div class="drop" data-kind="subpage" tabindex="0">
-      <div class="drop-icon ic-green">🗞️</div>
+      <div class="drop-icon ic-green"><svg class="ic-svg"><use href="#i-pages"/></svg></div>
       <div class="drop-body">
         <div class="drop-head"><strong>Subpage matched</strong><span class="opt">optional</span></div>
         <p>Shongbad + category subpages (supervisor file)</p>
@@ -162,7 +195,7 @@
       </div>
     </div>
     <div class="drop" data-kind="insta" tabindex="0">
-      <div class="drop-icon ic-pink">📸</div>
+      <div class="drop-icon ic-pink"><svg class="ic-svg"><use href="#i-camera"/></svg></div>
       <div class="drop-body">
         <div class="drop-head"><strong>Instagram matched</strong><span class="opt">optional</span></div>
         <p>Instagram views (supervisor file)</p>
@@ -186,16 +219,14 @@
 
 <!-- ── Match Review ── -->
 <section id="view-review" class="view" hidden>
-  <header class="page-head">
-    <div>
-      <h1>Match Review</h1>
-      <p class="hint">Supervisor-file matches are filled in. Collectors scrape the rest —
-      or click any cell to fix it yourself.</p>
-    </div>
-    <!-- chip-filter = app.js click hook; tabs/tab = shared segmented-control visuals -->
-    <div class="tabs" role="group" aria-label="Row filter">
-      <button class="tab chip-filter active" data-filter="all">All rows</button>
-      <button class="tab chip-filter" data-filter="attention">Needs attention</button>
+  <header class="view-head">
+    <p class="hint">Supervisor-file matches are filled in. Collectors scrape the rest —
+    or click any cell to fix it yourself.</p>
+    <div class="seg-icons" role="group" aria-label="Layout">
+      <button class="segbtn active" id="modeList" title="List &amp; detail" aria-label="List and detail view">
+        <svg class="ic-svg"><use href="#i-rows"/></svg></button>
+      <button class="segbtn" id="modeTable" title="Table" aria-label="Table view">
+        <svg class="ic-svg"><use href="#i-table"/></svg></button>
     </div>
   </header>
 
@@ -203,22 +234,21 @@
 
   <div class="card collect-panel">
     <div class="collect-head">
-      <strong>⚡ Auto-fill missing values</strong>
+      <strong><svg class="ic-svg"><use href="#i-zap"/></svg> Auto-fill missing values</strong>
       <p class="hint">Scrapers run right here, politely paced so your accounts stay safe.
       Values land in the table live.</p>
     </div>
     <div class="collect-actions">
       <div class="collect-card">
-        <div class="collect-title">🐦 X / Twitter impressions</div>
+        <div class="collect-title"><svg class="ic-svg"><use href="#i-x"/></svg> X / Twitter impressions</div>
         <p>Reads the public view count from each post page. No login, no credentials —
            your official account is never touched.</p>
         <button id="collectX" class="primary">Collect X views</button>
       </div>
       <div class="collect-card">
-        <div class="collect-title">📘 Facebook missing cells</div>
-        <p>First run opens a sign-in window automatically (2FA fine, done once).
-           Shared posts are resolved to the original post and read as <strong>real
-           views</strong> through your session — reactions × <span id="kLabel">95</span>
+        <div class="collect-title"><svg class="ic-svg"><use href="#i-facebook"/></svg> Facebook missing cells</div>
+        <p>Uses the Meta session from <strong>Accounts</strong>. Shared posts are resolved
+           to the original post and read as <strong>real views</strong> — reactions × <span id="kLabel">95</span>
            is only the last resort when no views figure is visible, and those cells
            are marked ≈.</p>
         <div class="collect-fb-row">
@@ -229,12 +259,30 @@
       </div>
     </div>
     <div id="collectProgress" class="collect-progress" hidden>
-      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
-      <div class="progress-meta">
-        <span id="progressText">Starting…</span>
-        <span id="progressCount"></span>
+      <div class="progress-unit" data-unit="x" hidden>
+        <div class="progress-head">
+          <strong><svg class="ic-svg"><use href="#i-x"/></svg> X / Twitter</strong>
+          <span class="progress-right">
+            <span class="pu-count"></span>
+            <button class="ghost stop-btn pu-stop" data-target="x">Stop</button>
+          </span>
+        </div>
+        <div class="progress-track"><div class="progress-fill pu-fill"></div></div>
+        <div class="progress-meta"><span class="pu-text">Starting…</span></div>
+        <ul class="progress-log pu-log"></ul>
       </div>
-      <ul id="progressLog" class="progress-log"></ul>
+      <div class="progress-unit" data-unit="fb" hidden>
+        <div class="progress-head">
+          <strong><svg class="ic-svg"><use href="#i-facebook"/></svg> Facebook</strong>
+          <span class="progress-right">
+            <span class="pu-count"></span>
+            <button class="ghost stop-btn pu-stop" data-target="fb">Stop</button>
+          </span>
+        </div>
+        <div class="progress-track"><div class="progress-fill pu-fill"></div></div>
+        <div class="progress-meta"><span class="pu-text">Starting…</span></div>
+        <ul class="progress-log pu-log"></ul>
+      </div>
     </div>
     <p id="collectError" class="error" hidden></p>
   </div>
@@ -247,18 +295,30 @@
     <span class="prov-chip pc-missing"><i class="dot p-missing"></i>missing</span>
   </div>
 
-  <div class="table-wrap card">
-    <table id="reviewTable">
-      <thead>
-        <tr>
-          <th class="th-no">No</th><th>Date</th><th class="cap-col">Content</th>
-          <th>FB 1 · Main</th><th>FB 2 · Shongbad</th><th>FB 3 · Subpage</th>
-          <th>X</th><th>Instagram</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+  <!-- curvy connected tabs — the active tab flows into the panel below -->
+  <div class="tabbar" role="group" aria-label="Row filter">
+    <button class="ctab chip-filter active" data-filter="all">All rows <span class="count" id="countAll"></span></button>
+    <button class="ctab chip-filter" data-filter="attention">Needs attention <span class="count" id="countAttn"></span></button>
   </div>
+  <div class="review-panel">
+    <div id="reviewSplit" class="review-split">
+      <div class="rlist" id="reviewList"></div>
+      <div class="rdetail" id="reviewDetail"></div>
+    </div>
+    <div class="table-wrap" id="tableWrap" hidden>
+      <table id="reviewTable">
+        <thead>
+          <tr>
+            <th class="th-no">No</th><th>Date</th><th class="cap-col">Content</th>
+            <th>FB 1 · Main</th><th>FB 2 · Shongbad</th><th>FB 3 · Subpage</th>
+            <th>X</th><th>Instagram</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
   <div id="issues" class="issues" hidden></div>
   <div class="stage-foot">
     <button id="toReport" class="primary lg">Continue to report →</button>
@@ -267,12 +327,9 @@
 
 <!-- ── Reports ── -->
 <section id="view-report" class="view" hidden>
-  <header class="page-head">
-    <div>
-      <h1>Reports</h1>
-      <p class="hint">The generated workbook matches your hand-made template exactly —
-      banner, live Sum / Total / Average formulas, styling and all.</p>
-    </div>
+  <header class="view-head">
+    <p class="hint">The generated workbook matches your hand-made template exactly —
+    banner, live Sum / Total / Average formulas, styling and all.</p>
   </header>
   <div class="tiles" id="reportTiles"></div>
 
@@ -291,7 +348,7 @@
     </label>
     <div class="gen-actions">
       <button id="genBtn" class="primary lg">Generate .xlsx</button>
-      <a id="dlBtn" class="ghost lg" hidden download>⬇ Download</a>
+      <a id="dlBtn" class="ghost lg" hidden download><svg class="ic-svg"><use href="#i-download"/></svg> <span id="dlText">Download</span></a>
     </div>
   </div>
 
@@ -306,14 +363,58 @@
   </details>
 </section>
 
-</div><!-- /appmain -->
-</div><!-- /shell -->
+<!-- ── Accounts ── -->
+<section id="view-accounts" class="view" hidden>
+  <header class="view-head">
+    <p class="hint">Connect once, up front — collectors reuse the stored session instead of
+    interrupting a scrape with a sign-in window. Sessions never leave this machine.</p>
+  </header>
+
+  <div class="acct-grid">
+    <div class="card acct">
+      <div class="acct-head">
+        <div class="acct-ic" style="background:var(--fb)"><svg class="ic-svg"><use href="#i-facebook"/></svg></div>
+        <div>
+          <strong>Meta — Facebook &amp; Instagram</strong>
+          <span class="sub">One session covers both platforms' collectors</span>
+        </div>
+        <span class="acct-pill" id="metaStatus">checking…</span>
+      </div>
+      <p class="acct-desc">Signing in opens a real browser window on this machine (2FA is fine).
+      Close it when you're done — RELAY keeps the session in <code>data/sessions</code> and
+      reads views through it, exactly as if you were browsing.</p>
+      <div class="acct-actions">
+        <button class="primary" id="metaConnect">Connect Meta account</button>
+        <span class="hint" id="metaHint"></span>
+      </div>
+    </div>
+
+    <div class="card acct">
+      <div class="acct-head">
+        <div class="acct-ic" style="background:var(--xc)"><svg class="ic-svg"><use href="#i-x"/></svg></div>
+        <div>
+          <strong>X (Twitter)</strong>
+          <span class="sub">Public scraping — nothing to connect</span>
+        </div>
+        <span class="acct-pill ok">no login needed</span>
+      </div>
+      <p class="acct-desc">Impressions are read from each post's public page. No account,
+      no credentials, and your official handle is never touched.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+</div><!-- /panel -->
+</div><!-- /app -->
 
 <!-- cell editor dialog -->
 <dialog id="cellDialog">
   <form method="dialog">
     <h3 id="cellTitle">Edit cell</h3>
     <p id="cellMeta" class="hint"></p>
+    <a id="cellLink" class="iconlink" target="_blank" rel="noopener" hidden>
+      <svg class="ic-svg"><use href="#i-external"/></svg> open the post to read its numbers</a>
     <div class="tabs">
       <button type="button" class="tab active" data-tab="estimate">Estimate from reactions</button>
       <button type="button" class="tab" data-tab="manual">Manual value</button>
@@ -334,6 +435,7 @@
     </div>
     <menu>
       <button value="cancel" class="ghost">Cancel</button>
+      <button value="apply-next" class="ghost">Apply → next missing</button>
       <button value="apply" id="cellApply" class="primary">Apply</button>
     </menu>
   </form>
