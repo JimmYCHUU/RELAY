@@ -97,6 +97,7 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       <h2 class="greet" id="greeting">Good morning 👋</h2>
       <p class="hint" id="greetSub">Here's an overview of your sponsored content performance.</p>
     </div>
+    <div class="tabs" id="dashBrandSeg" role="group" aria-label="Brand" hidden></div>
   </header>
 
   <div id="dashEmpty" class="empty-state">
@@ -212,8 +213,11 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <label>Month tab
       <select id="sheet" disabled><option>Upload campaign first</option></select>
     </label>
+    <button id="addBrandBtn" class="ghost lg" disabled title="Stage this brand, then upload the next campaign sheet">
+      <svg class="ic-svg"><use href="#i-plus"/></svg> Add brand</button>
     <button id="runBtn" class="primary lg" disabled>Run matching →</button>
   </div>
+  <div id="cycleList" class="cycle-list" hidden></div>
   <p id="runError" class="error" hidden></p>
 </section>
 
@@ -295,12 +299,15 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <span class="prov-chip pc-missing"><i class="dot p-missing"></i>missing</span>
   </div>
 
-  <!-- curvy connected tabs — the active tab flows into the panel below -->
-  <div class="tabbar" role="group" aria-label="Row filter">
-    <button class="ctab chip-filter active" data-filter="all">All rows <span class="count" id="countAll"></span></button>
-    <button class="ctab chip-filter" data-filter="attention">Needs attention <span class="count" id="countAttn"></span></button>
-  </div>
+  <!-- curvy connected tabs = which brand's workspace; segments inside = filters -->
+  <div class="tabbar" id="brandTabs" role="tablist" aria-label="Brand"></div>
   <div class="review-panel">
+    <div class="panel-toolbar">
+      <div class="tabs seg-filter" role="group" aria-label="Row filter">
+        <button class="tab chip-filter active" data-filter="all">All rows <span class="count" id="countAll"></span></button>
+        <button class="tab chip-filter" data-filter="attention">Needs attention <span class="count" id="countAttn"></span></button>
+      </div>
+    </div>
     <div id="reviewSplit" class="review-split">
       <div class="rlist" id="reviewList"></div>
       <div class="rdetail" id="reviewDetail"></div>
@@ -331,6 +338,9 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <p class="hint">The generated workbook matches your hand-made template exactly —
     banner, live Sum / Total / Average formulas, styling and all.</p>
   </header>
+
+  <div class="tabbar" id="brandTabsReport" role="tablist" aria-label="Brand"></div>
+  <div class="brand-panel">
   <div class="tiles" id="reportTiles"></div>
 
   <figure class="card chart-card">
@@ -347,6 +357,8 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       <span>Mark estimated cells with comments <span class="sub">(untick for the sponsor-facing copy)</span></span>
     </label>
     <div class="gen-actions">
+      <button id="genAllBtn" class="ghost lg" hidden>Generate all brands (.zip)</button>
+      <a id="dlAllBtn" class="ghost lg" hidden download><svg class="ic-svg"><use href="#i-download"/></svg> <span id="dlAllText">Download zip</span></a>
       <button id="genBtn" class="primary lg">Generate .xlsx</button>
       <a id="dlBtn" class="ghost lg" hidden download><svg class="ic-svg"><use href="#i-download"/></svg> <span id="dlText">Download</span></a>
     </div>
@@ -361,6 +373,7 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <button id="ccBtn" class="ghost" disabled>Run cross-check</button>
     <div id="ccResult" hidden></div>
   </details>
+  </div><!-- /brand-panel -->
 </section>
 
 <!-- ── Accounts ── -->
