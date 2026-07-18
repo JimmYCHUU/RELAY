@@ -23,14 +23,17 @@
   --good-text: #006300;
   --good-soft: rgba(12, 163, 12, 0.10);
   --warning: #eda100;
+  --warning-text: #8a5c00;
   --warning-soft: rgba(237, 161, 0, 0.13);
   --serious: #ec835a;
   --critical: #d03b3b;
   --critical-soft: rgba(208, 59, 59, 0.09);
   --aqua: #1baf7a;
+  --aqua-text: #0b7550;
   --aqua-soft: rgba(27, 175, 122, 0.11);
   --shadow: 0 1px 2px rgba(20,22,31,.04), 0 6px 24px rgba(20,22,31,.05);
   --shadow-lift: 0 4px 10px rgba(20,22,31,.07), 0 16px 40px rgba(20,22,31,.09);
+  --shadow-tab: 0 1px 2px rgba(20,22,31,.08), 0 1px 4px rgba(20,22,31,.10);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -55,11 +58,14 @@
     --x-soft: rgba(144, 133, 233, 0.14);
     --good-text: #0ca30c;
     --good-soft: rgba(12, 163, 12, 0.16);
+    --warning-text: #eda100;
     --warning-soft: rgba(237, 161, 0, 0.16);
     --critical-soft: rgba(208, 59, 59, 0.18);
+    --aqua-text: #2cc48c;
     --aqua-soft: rgba(27, 175, 122, 0.16);
     --shadow: none;
     --shadow-lift: 0 0 0 1px rgba(255,255,255,.05);
+    --shadow-tab: 0 1px 2px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.05);
   }
 }
 
@@ -240,16 +246,20 @@ input:focus-visible, select:focus-visible {
 .ps-cov.ok { color: var(--good-text); }
 .ps-cov.low { color: var(--critical); }
 
-/* donut */
-.donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+/* donut — read as a progress ring: rate numeral primary, compact legend below (DESIGN.md §4) */
+.donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .donut { position: relative; width: 138px; height: 138px; flex-shrink: 0; }
 .donut svg { transform: rotate(-90deg); }
 .donut-center {
   position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
 }
-.donut-center strong { font-size: 23px; letter-spacing: -0.02em; }
-.donut-legend { list-style: none; margin: 0; padding: 0; font-size: 13px; flex: 1; min-width: 150px; }
-.donut-legend li { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.donut-center strong { font-size: 28px; letter-spacing: -0.02em; display: block; line-height: 1.15; }
+.donut-legend {
+  list-style: none; margin: 0; padding: 0; font-size: 12.5px;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 22px; width: 100%; min-width: 0;
+}
+.donut-legend li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .donut-legend .dl-val { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 
 /* top content */
@@ -356,7 +366,17 @@ input:focus-visible, select:focus-visible {
 .progress-log li { padding: 2px 0; }
 .progress-log li:first-child { color: var(--ink); }
 
-.table-legend { margin: 2px 2px 10px; }
+.table-legend { margin: 2px 2px 10px; gap: 8px; }
+.prov-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  border-radius: 7px; padding: 4px 10px;
+}
+.pc-matched { background: var(--good-soft); color: var(--good-text); }
+.pc-collected { background: var(--aqua-soft); color: var(--aqua-text); }
+.pc-estimated { background: var(--warning-soft); color: var(--warning-text); }
+.pc-manual { background: var(--accent-soft); color: var(--accent); }
+.pc-missing { background: var(--critical-soft); color: var(--critical); }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
 .p-matched { background: var(--good); }
 .p-estimated { background: var(--warning); }
@@ -364,9 +384,23 @@ input:focus-visible, select:focus-visible {
 .p-manual { background: var(--accent); }
 .p-missing { background: transparent; border: 2px solid var(--critical); }
 
-.filters { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--grid); padding: 4px; border-radius: 999px; }
-.chip-filter { border: none; background: transparent; color: var(--ink-2); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
-.chip-filter.active { background: var(--accent); color: #fff; }
+/* segmented control — the app's one "pick one of these" language (DESIGN.md §2).
+   .chip-filter stays in the markup as the app.js click hook; visuals live here. */
+.tabs {
+  display: flex; gap: 6px;
+  background: var(--surface-2);
+  padding: 4px; border-radius: 10px;
+}
+.tab {
+  flex: 1; border: none; background: transparent; color: var(--ink-2);
+  border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600;
+  white-space: nowrap;
+  transition: background 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+.tab.active {
+  background: var(--surface); color: var(--ink);
+  box-shadow: var(--shadow-tab);
+}
 
 .table-wrap { overflow: auto; max-height: 640px; padding: 0; }
 table { border-collapse: collapse; width: 100%; min-width: 1020px; }
@@ -466,9 +500,7 @@ dialog h3 { margin: 0 0 4px; font-size: 17px; }
 dialog label { margin: 12px 0; }
 dialog input[type="range"] { min-width: 0; accent-color: var(--accent); }
 dialog menu { display: flex; justify-content: flex-end; gap: 10px; padding: 0; margin: 16px 0 0; }
-.tabs { display: flex; gap: 6px; margin: 12px 0 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; }
-.tab { flex: 1; border: none; background: transparent; color: var(--ink-2); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; }
-.tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+dialog .tabs { margin: 12px 0 4px; }
 .tooltip {
   position: fixed; z-index: 30; pointer-events: none;
   background: var(--ink); color: var(--surface);
