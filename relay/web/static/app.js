@@ -8,13 +8,16 @@ const state = {
   files: {},          // kind -> {path, name, sheets?}
   run: null,          // serialized run payload
   filter: "all",
+  reviewMode: "list", // "list" (master-detail) | "table"
+  selectedRow: null,  // row.no highlighted in the list
   editing: null,      // {rowNo, slot}
-  collecting: null,   // "x" | "fb" while a job runs
+  collecting: { x: false, fb: false },  // both can run at once — independent browsers
   freshCells: new Set(),
 };
 
 const SLOT_LABELS = { fb1: "FB 1", fb2: "FB 2", fb3: "FB 3", x: "X", ig: "IG" };
 const PLATFORM_LABELS = { fb1: "FB · Main", fb2: "FB · Shongbad", fb3: "FB · Subpage", x: "X / Twitter", ig: "Instagram" };
+const icon = (id) => `<svg class="ic-svg" aria-hidden="true"><use href="#${id}"/></svg>`;
 const fmt = (n) => n == null ? "—" : n.toLocaleString("en-US");
 const fmtShort = (n) => {
   if (n == null) return "—";
@@ -24,17 +27,26 @@ const fmtShort = (n) => {
 };
 
 /* ═════════ navigation ═════════ */
+const VIEW_TITLES = { dashboard: "Dashboard", inputs: "Data Sources", review: "Match Review",
+                      report: "Reports", accounts: "Accounts" };
 function showView(id) {
   $$(".view").forEach((v) => { v.hidden = v.id !== `view-${id}`; });
   $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === id));
+  $("#tbTitle").textContent = VIEW_TITLES[id] || "RELAY";
+  $("#crumbView").textContent = VIEW_TITLES[id] || id;
   if (id === "dashboard") renderDashboard();
   if (id === "report") renderReport();
+  if (id === "accounts") refreshMetaStatus();
   window.scrollTo({ top: 0 });
 }
 $$(".nav-item").forEach((b) => b.addEventListener("click", () => {
   if (b.hasAttribute("data-locked")) return;
   showView(b.dataset.view);
 }));
+// mouse clicks shouldn't leave a keyboard-focus ring on toggles; Tab focus is unaffected
+document.addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".nav-item, .tab, .chip-filter, .qa")) e.preventDefault();
+});
 document.addEventListener("click", (e) => {
   const go = e.target.closest("[data-goto-view]");
   if (go) {
@@ -121,7 +133,7 @@ $("#runBtn").addEventListener("click", async () => {
     state.run = await res.json();
     unlockViews();
     $("#exportBtn").disabled = false;
-    $("#rangePill").textContent = `📅 ${state.run.brand} · ${state.run.month}`;
+    $("#rangeText").textContent = `${state.run.brand} · ${state.run.month}`;
     $("#syncTitle").textContent = `${state.run.brand} · ${state.run.month}`;
     $("#syncSub").textContent = `${state.run.rows.length} content rows loaded`;
     renderReview();
@@ -190,12 +202,12 @@ function renderDashboard() {
     `Here's the ${r.brand} · ${r.month} sponsored content performance.`;
 
   $("#kpiRow").innerHTML = [
-    kpi("📦", "ic-indigo", "Total Contents", String(r.rows.length), "photocards this month"),
-    kpi("👁", "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
-    kpi("𝕏", "ic-navy", "X Impressions", fmtShort(sums.x),
+    kpi(icon("i-package"), "ic-indigo", "Total Contents", String(r.rows.length), "photocards this month"),
+    kpi(icon("i-eye"), "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
+    kpi(icon("i-x"), "ic-navy", "X Impressions", fmtShort(sums.x),
       sums.x ? "real, scraped from X" : "not collected yet"),
-    kpi("🎯", "ic-green", "Match Rate", `${matchRate}%`, "verified values, no estimates"),
-    kpi("⚠️", "ic-amber", "Needs Review", String(review), review === 1 ? "content row" : "content rows"),
+    kpi(icon("i-target"), "ic-green", "Match Rate", `${matchRate}%`, "verified values, no estimates"),
+    kpi(icon("i-alert"), "ic-amber", "Needs Review", String(review), review === 1 ? "content row" : "content rows"),
   ].join("");
 
   renderLineChart();
@@ -300,10 +312,10 @@ function renderPlatformSummary(sums) {
   const cov = state.run.coverage;
   const xReal = state.run.rows.some((r) => r.cells.x.provenance === "collected");
   const rows = [
-    { ic: "f", bg: "#2a78d6", name: "Facebook", sub: "Views", val: sums.fb1 + sums.fb2 + sums.fb3,
+    { ic: icon("i-facebook"), bg: "var(--fb)", name: "Facebook", sub: "Views", val: sums.fb1 + sums.fb2 + sums.fb3,
       cov: (cov.fb1 + cov.fb2 + cov.fb3) / 3 },
-    { ic: "📸", bg: "#e87ba4", name: "Instagram", sub: "Views", val: sums.ig, cov: cov.ig },
-    { ic: "𝕏", bg: "#14161f", name: "X (Twitter)", sub: "Impressions", val: sums.x, cov: cov.x,
+    { ic: icon("i-camera"), bg: "var(--igc)", name: "Instagram", sub: "Views", val: sums.ig, cov: cov.ig },
+    { ic: icon("i-x"), bg: "var(--xc)", name: "X (Twitter)", sub: "Impressions", val: sums.x, cov: cov.x,
       badge: xReal ? { cls: "real", text: "real · scraped" } : { cls: "none", text: "not collected" } },
   ];
   $("#platformSummary").innerHTML = rows.map((r) => `
@@ -373,7 +385,7 @@ async function renderActivity() {
   try {
     const runs = await (await fetch("/api/runs")).json();
     items = runs.slice(0, 5).map((r) => ({
-      ic: r.status === "generated" ? "📄" : "🔗",
+      ic: icon(r.status === "generated" ? "i-doc" : "i-link"),
       title: r.status === "generated"
         ? `${r.brand} · ${r.month} — report generated`
         : `${r.brand} · ${r.month} — supervisor files matched`,
@@ -398,7 +410,7 @@ $$(".chip-filter").forEach((b) => b.addEventListener("click", () => {
   $$(".chip-filter").forEach((x) => x.classList.remove("active"));
   b.classList.add("active");
   state.filter = b.dataset.filter;
-  renderReviewRows();
+  renderReviewBody();
 }));
 
 function needsAttention(row) {
@@ -418,7 +430,7 @@ function renderReview() {
   const attention = r.rows.filter(needsAttention).length;
   tiles.push(tile("Needs attention", String(attention), attention === 1 ? "row" : "rows", attention > 0));
   $("#coverageTiles").innerHTML = tiles.join("");
-  renderReviewRows();
+  renderReviewBody();
 
   const issues = $("#issues");
   if (r.issues.length) {
@@ -476,18 +488,43 @@ function provTip(c) {
 
 /* ═════════ cell editor ═════════ */
 const dialog = $("#cellDialog");
-document.addEventListener("click", (e) => {
-  const btn = e.target.closest(".cell-edit");
-  if (!btn) return;
-  state.editing = { rowNo: +btn.dataset.row, slot: btn.dataset.slot };
-  const row = state.run.rows.find((r) => r.no === state.editing.rowNo);
-  const c = row.cells[state.editing.slot];
-  $("#cellTitle").textContent = `Row ${row.no} · ${SLOT_LABELS[state.editing.slot]}`;
+function openCellEditor(rowNo, slot) {
+  state.editing = { rowNo, slot };
+  const row = state.run.rows.find((r) => r.no === rowNo);
+  const c = row.cells[slot];
+  if (state.reviewMode === "list" && state.selectedRow !== rowNo) {
+    state.selectedRow = rowNo;
+    renderReviewList();
+  }
+  $("#cellTitle").textContent = `Row ${row.no} · ${SLOT_LABELS[slot]}`;
   $("#cellMeta").textContent = c.note || (c.value != null ? `current: ${fmt(c.value)} (${c.provenance})` : "no value yet");
+  const link = $("#cellLink");
+  link.hidden = !row.links[slot];
+  if (row.links[slot]) link.href = row.links[slot];
   $("#reactions").value = "";
   $("#manualValue").value = c.value ?? "";
   dialog.showModal();
+}
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".cell-edit");
+  if (!btn) return;
+  openCellEditor(+btn.dataset.row, btn.dataset.slot);
 });
+
+/* scan forward (wrapping) for the next linked cell that still has no value */
+function nextMissingCell(fromRowNo, fromSlot) {
+  const slots = ["fb1", "fb2", "fb3", "x", "ig"];
+  const rows = state.run.rows;
+  const startRow = rows.findIndex((r) => r.no === fromRowNo);
+  const startSlot = slots.indexOf(fromSlot);
+  for (let step = 1; step <= rows.length * slots.length; step++) {
+    const flat = startRow * slots.length + startSlot + step;
+    const row = rows[Math.floor(flat / slots.length) % rows.length];
+    const slot = slots[flat % slots.length];
+    if (row.links[slot] && row.cells[slot].value == null) return { rowNo: row.no, slot };
+  }
+  return null;
+}
 
 $$(".tab", dialog).forEach((t) => t.addEventListener("click", () => {
   $$(".tab", dialog).forEach((x) => x.classList.remove("active"));
@@ -497,7 +534,8 @@ $$(".tab", dialog).forEach((t) => t.addEventListener("click", () => {
 $("#kSlider").addEventListener("input", () => { $("#kOut").textContent = $("#kSlider").value; });
 
 dialog.addEventListener("close", async () => {
-  if (dialog.returnValue !== "apply" || !state.editing) return;
+  const wantNext = dialog.returnValue === "apply-next";
+  if ((dialog.returnValue !== "apply" && !wantNext) || !state.editing) return;
   const { rowNo, slot } = state.editing;
   const activeTab = $(".tab.active", dialog).dataset.tab;
   let url, body;
@@ -518,6 +556,10 @@ dialog.addEventListener("close", async () => {
   row.cells[slot] = cell;
   recomputeCoverage();
   renderReview();
+  if (wantNext) {
+    const next = nextMissingCell(rowNo, slot);
+    if (next) setTimeout(() => openCellEditor(next.rowNo, next.slot), 0);
+  }
 });
 
 function recomputeCoverage() {
@@ -538,8 +580,15 @@ $("#kCollect").addEventListener("input", () => {
 $("#collectX").addEventListener("click", () => startCollect("x"));
 $("#collectFB").addEventListener("click", () => startCollect("fb"));
 
+const COLLECT_BTN = { x: "#collectX", fb: "#collectFB" };
+function puEls(target) {
+  const u = $(`.progress-unit[data-unit="${target}"]`);
+  return { u, fill: $(".pu-fill", u), text: $(".pu-text", u),
+           count: $(".pu-count", u), log: $(".pu-log", u), stop: $(".pu-stop", u) };
+}
+
 async function startCollect(target) {
-  if (!state.run || state.collecting) return;
+  if (!state.run || state.collecting[target]) return;
   const body = { run_id: state.run.run_id, target, k: +$("#kCollect").value };
   const res = await fetch("/api/collect", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -557,22 +606,26 @@ async function startCollect(target) {
     return;
   }
   errEl.hidden = true;
-  state.collecting = target;
-  $("#collectX").disabled = $("#collectFB").disabled = true;
-  const box = $("#collectProgress");
-  box.hidden = false;
-  $("#progressFill").style.width = "0%";
-  $("#progressText").textContent = target === "x"
+  state.collecting[target] = true;
+  $(COLLECT_BTN[target]).disabled = true;
+  $("#collectProgress").hidden = false;
+  const el = puEls(target);
+  el.u.hidden = false;
+  el.fill.style.width = "0%";
+  el.text.textContent = target === "x"
     ? "Scraping public X pages (politely paced)…"
     : "Collecting Facebook via your Meta session…";
-  $("#progressCount").textContent = "";
-  $("#progressLog").innerHTML = "";
+  el.count.textContent = "";
+  el.log.innerHTML = "";
+  el.stop.hidden = false;
+  el.stop.disabled = false;
   pollCollect(target);
 }
 
 async function pollCollect(target) {
+  const el = puEls(target);
   const res = await fetch(`/api/collect/${state.run.run_id}/${target}`);
-  if (!res.ok) { finishCollect("status check failed"); return; }
+  if (!res.ok) { finishCollect(target, "status check failed"); return; }
   const s = await res.json();
   if (s.state === "idle") { setTimeout(() => pollCollect(target), 1200); return; }
 
@@ -585,13 +638,14 @@ async function pollCollect(target) {
         }
       }
     }
+    // both pollers merge into state.run; each only adds cells its collector filled
     state.run = s.run;
   }
   const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
-  $("#progressFill").style.width = pct + "%";
-  $("#progressCount").textContent = s.total ? `${s.done}/${s.total} visited · ${s.filled} filled` : "";
+  el.fill.style.width = pct + "%";
+  el.count.textContent = s.total ? `${s.done}/${s.total} visited · ${s.filled} filled` : "";
   if (s.events?.length) {
-    $("#progressLog").innerHTML = s.events.slice().reverse()
+    el.log.innerHTML = s.events.slice().reverse()
       .map((e) => `<li>${esc(e)}</li>`).join("");
   }
   recomputeCoverage();
@@ -600,8 +654,8 @@ async function pollCollect(target) {
   if (s.state === "running") {
     setTimeout(() => pollCollect(target), 2000);
   } else {
-    finishCollect(s.message || s.state);
-    if (s.state === "error" || s.state === "stopped") {
+    finishCollect(target, s.message || s.state);
+    if (s.state === "error") {
       const errEl = $("#collectError");
       errEl.textContent = s.message;
       errEl.hidden = false;
@@ -609,12 +663,22 @@ async function pollCollect(target) {
   }
 }
 
-function finishCollect(message) {
-  state.collecting = null;
-  $("#collectX").disabled = $("#collectFB").disabled = false;
-  $("#progressText").textContent = message;
+function finishCollect(target, message) {
+  state.collecting[target] = false;
+  $(COLLECT_BTN[target]).disabled = false;
+  const el = puEls(target);
+  el.stop.hidden = true;
+  el.text.textContent = message;
   setTimeout(() => state.freshCells.clear(), 4000);
 }
+
+$$(".pu-stop").forEach((b) => b.addEventListener("click", async () => {
+  const target = b.dataset.target;
+  if (!state.run || !state.collecting[target]) return;
+  b.disabled = true;
+  puEls(target).text.textContent = "Stopping after the current post…";
+  await fetch(`/api/collect/${state.run.run_id}/${target}/stop`, { method: "POST" });
+}));
 
 /* one-time Meta sign-in, launched straight from the Collect button */
 async function metaSignInThenCollect() {
@@ -622,28 +686,30 @@ async function metaSignInThenCollect() {
   const errEl = $("#collectError");
   if (!res.ok) { errEl.textContent = await errText(res); errEl.hidden = false; return; }
   errEl.hidden = true;
-  const box = $("#collectProgress");
-  box.hidden = false;
-  $("#progressFill").style.width = "0%";
-  $("#progressCount").textContent = "";
-  $("#progressLog").innerHTML = "";
-  $("#progressText").textContent =
+  $("#collectProgress").hidden = false;
+  const el = puEls("fb");
+  el.u.hidden = false;
+  el.fill.style.width = "0%";
+  el.count.textContent = "";
+  el.log.innerHTML = "";
+  el.stop.hidden = true;
+  el.text.textContent =
     "A browser window opened on this machine — sign in to Facebook / Meta Business Suite " +
     "(2FA is fine), then close that window. Collection starts automatically.";
-  $("#collectX").disabled = $("#collectFB").disabled = true;
+  $("#collectFB").disabled = true;
 
   const poll = async () => {
     const s = await (await fetch("/api/login/meta/status")).json();
     if (s.error) {
-      $("#collectX").disabled = $("#collectFB").disabled = false;
-      $("#progressText").textContent = "Sign-in did not complete.";
+      $("#collectFB").disabled = false;
+      el.text.textContent = "Sign-in did not complete.";
       errEl.textContent = s.error;
       errEl.hidden = false;
       return;
     }
     if (s.ready) {
-      $("#collectX").disabled = $("#collectFB").disabled = false;
-      $("#progressText").textContent = "Signed in — starting Facebook collection…";
+      $("#collectFB").disabled = false;
+      el.text.textContent = "Signed in — starting Facebook collection…";
       startCollect("fb");
       return;
     }
@@ -702,7 +768,7 @@ $("#genBtn").addEventListener("click", async () => {
   const dl = $("#dlBtn");
   dl.hidden = false;
   dl.href = `/api/report/${state.run.run_id}/download`;
-  dl.textContent = `⬇ Download ${data.name}`;
+  $("#dlText").textContent = `Download ${data.name}`;
 });
 
 /* ═════════ cross-check ═════════ */
@@ -761,3 +827,186 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (ch) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
+
+/* ═════════ review body: master–detail list or table ═════════ */
+const SLOT_META = {
+  fb1: { icon: "i-facebook", bg: "var(--fb)" },
+  fb2: { icon: "i-facebook", bg: "var(--fb)" },
+  fb3: { icon: "i-facebook", bg: "var(--fb)" },
+  x:   { icon: "i-x",        bg: "var(--xc)" },
+  ig:  { icon: "i-camera",   bg: "var(--igc)" },
+};
+const STATUS_CHIP = {
+  matched:   ["pc-matched", "verified"],
+  estimated: ["pc-estimated", "estimated"],
+  missing:   ["pc-missing", "needs review"],
+};
+
+function filteredRows() {
+  return state.run.rows.filter((r) => state.filter === "all" || needsAttention(r));
+}
+
+function updateFilterCounts() {
+  $("#countAll").textContent = state.run.rows.length;
+  $("#countAttn").textContent = state.run.rows.filter(needsAttention).length;
+}
+
+function renderReviewBody() {
+  updateFilterCounts();
+  const table = state.reviewMode === "table";
+  $("#reviewSplit").hidden = table;
+  $("#tableWrap").hidden = !table;
+  if (table) renderReviewRows(); else renderReviewList();
+}
+
+function setReviewMode(mode) {
+  state.reviewMode = mode;
+  $("#modeList").classList.toggle("active", mode === "list");
+  $("#modeTable").classList.toggle("active", mode === "table");
+  if (state.run) renderReviewBody();
+}
+$("#modeList").addEventListener("click", () => setReviewMode("list"));
+$("#modeTable").addEventListener("click", () => setReviewMode("table"));
+
+function miniRing(filled, linked, status) {
+  const R = 12, C = 2 * Math.PI * R;
+  const frac = linked ? filled / linked : 0;
+  const color = status === "matched" ? "var(--good)"
+    : status === "estimated" ? "var(--warning)" : "var(--critical)";
+  return `<span class="mini-ring" aria-hidden="true">
+    <svg width="30" height="30" viewBox="0 0 30 30">
+      <circle r="${R}" cx="15" cy="15" fill="none" stroke="var(--grid)" stroke-width="3"/>
+      <circle r="${R}" cx="15" cy="15" fill="none" stroke="${color}" stroke-width="3"
+        stroke-linecap="round" stroke-dasharray="${(frac * C).toFixed(1)} ${C.toFixed(1)}"/>
+    </svg>
+    <span class="mr-n">${filled}/${linked}</span>
+  </span>`;
+}
+
+function renderReviewList() {
+  const rows = filteredRows();
+  const list = $("#reviewList");
+  if (!rows.length) {
+    list.innerHTML = `<div class="rlist-empty">Nothing needs attention 🎉</div>`;
+    $("#reviewDetail").innerHTML = "";
+    return;
+  }
+  if (!rows.some((r) => r.no === state.selectedRow)) state.selectedRow = rows[0].no;
+  list.innerHTML = rows.map((row) => {
+    const linked = Object.keys(row.cells).filter((s) => row.links[s]);
+    const filled = linked.filter((s) => row.cells[s].value != null).length;
+    const st = rowStatus(row);
+    const [chipCls, chipLabel] = STATUS_CHIP[st];
+    const date = row.date
+      ? new Date(row.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—";
+    return `<button class="rcard${row.no === state.selectedRow ? " selected" : ""}" data-no="${row.no}">
+      <span class="rcard-top"><span>№ ${row.no}</span><span>${esc(date)}</span></span>
+      <span class="rcard-cap" title="${esc(row.caption)}">${esc(row.caption)}</span>
+      <span class="rcard-foot">
+        <span class="prov-chip ${chipCls}">${chipLabel}</span>
+        ${miniRing(filled, linked.length, st)}
+      </span>
+    </button>`;
+  }).join("");
+  renderReviewDetail();
+}
+
+$("#reviewList").addEventListener("click", (e) => {
+  const card = e.target.closest(".rcard");
+  if (!card) return;
+  state.selectedRow = +card.dataset.no;
+  renderReviewList();
+});
+
+function renderReviewDetail() {
+  const row = state.run.rows.find((r) => r.no === state.selectedRow);
+  const el = $("#reviewDetail");
+  if (!row) { el.innerHTML = ""; return; }
+  const st = rowStatus(row);
+  const [chipCls, chipLabel] = STATUS_CHIP[st];
+  const date = row.date
+    ? new Date(row.date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "no date";
+  el.innerHTML = `
+    <h3 class="rd-cap">${esc(row.caption)}</h3>
+    <div class="rd-meta">
+      <span class="sub">№ ${row.no} · ${esc(date)}</span>
+      <span class="prov-chip ${chipCls}">${chipLabel}</span>
+    </div>
+    ${["fb1", "fb2", "fb3", "x", "ig"].map((slot) => slotRowHtml(row, slot)).join("")}`;
+}
+
+function slotRowHtml(row, slot) {
+  const meta = SLOT_META[slot];
+  const link = row.links[slot];
+  const c = row.cells[slot];
+  const name = PLATFORM_LABELS[slot];
+  if (!link) {
+    return `<div class="slot-row" style="opacity:.45">
+      <div class="slot-ic" style="background:${meta.bg}"><svg class="ic-svg"><use href="#${meta.icon}"/></svg></div>
+      <div class="slot-name"><strong>${esc(name)}</strong><span class="sub">no link in the campaign sheet</span></div>
+    </div>`;
+  }
+  const dot = `<i class="dot p-${c.value == null ? "missing" : c.provenance}" data-tip="${esc(provTip(c))}"></i>`;
+  const conf = c.value != null && c.confidence < 0.95
+    ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
+  const fresh = state.freshCells.has(`${row.no}:${slot}`) ? " freshly" : "";
+  const approx = c.provenance === "estimated" ? "≈" : "";
+  const val = c.value != null
+    ? `<span class="val${fresh}${approx ? " est" : ""}">${approx}${fmt(c.value)}</span>`
+    : `<span class="noval">missing</span>`;
+  return `<div class="slot-row">
+    <div class="slot-ic" style="background:${meta.bg}"><svg class="ic-svg"><use href="#${meta.icon}"/></svg></div>
+    <div class="slot-name"><strong>${esc(name)}</strong>
+      <span class="sub">${esc(c.value != null ? c.provenance : "unresolved")}</span></div>
+    <div class="slot-val">${dot}${val}${conf}
+      <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Estimate or enter manually">✎ edit</button>
+    </div>
+    <a class="iconlink" href="${esc(link)}" target="_blank" rel="noopener">
+      <svg class="ic-svg"><use href="#i-external"/></svg> post</a>
+  </div>`;
+}
+
+/* ═════════ accounts ═════════ */
+async function refreshMetaStatus() {
+  const pill = $("#metaStatus"), btn = $("#metaConnect"), hint = $("#metaHint");
+  try {
+    const s = await (await fetch("/api/login/meta/status")).json();
+    if (s.running) {
+      pill.textContent = "sign-in window open";
+      pill.className = "acct-pill warn";
+      btn.disabled = true;
+      hint.textContent = "Finish signing in, then close that browser window.";
+      setTimeout(() => { if (!$("#view-accounts").hidden) refreshMetaStatus(); }, 2000);
+    } else if (s.ready) {
+      pill.textContent = "connected";
+      pill.className = "acct-pill ok";
+      btn.disabled = true;
+      btn.textContent = "Session stored";
+      hint.textContent = "Collectors will scrape through this session.";
+    } else {
+      pill.textContent = "not connected";
+      pill.className = "acct-pill";
+      btn.disabled = false;
+      btn.textContent = "Connect Meta account";
+      hint.textContent = s.error || "";
+    }
+  } catch {
+    pill.textContent = "status unavailable";
+    pill.className = "acct-pill";
+  }
+}
+$("#metaConnect").addEventListener("click", async () => {
+  const res = await fetch("/api/login/meta", { method: "POST" });
+  if (!res.ok) $("#metaHint").textContent = await errText(res);
+  refreshMetaStatus();
+});
+
+/* ═════════ theme ═════════ */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("relay-theme", t);
+  $("use", $("#themeBtn")).setAttribute("href", t === "dark" ? "#i-sun" : "#i-moon");
+}
+applyTheme(document.documentElement.dataset.theme || "light");
+$("#themeBtn").addEventListener("click", () =>
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));

@@ -260,6 +260,15 @@ def collect(req: CollectReq) -> dict:
     return {"started": True, "target": req.target}
 
 
+@app.post("/api/collect/{run_id}/{target}/stop")
+def collect_stop(run_id: str, target: str) -> dict:
+    p = _jobs.get((run_id, target))
+    if p is None or p.state != "running":
+        return {"stopping": False}
+    p.stop_requested = True
+    return {"stopping": True}
+
+
 @app.get("/api/collect/{run_id}/{target}")
 def collect_status(run_id: str, target: str) -> dict:
     result = _get_run(run_id)

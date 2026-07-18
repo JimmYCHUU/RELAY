@@ -69,11 +69,17 @@ def anonymous_page():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=_executable(), headless=True)
         try:
-            yield browser.new_page(
+            page = browser.new_page(
                 user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                            "(KHTML, like Gecko) Chrome/126 Safari/537.36",
                 viewport={"width": 1280, "height": 900},
             )
+            # the Views figure is text — skip photos/video/fonts for much
+            # faster loads (fine here: this context is logged out, C-3)
+            page.route("**/*", lambda route: route.abort()
+                       if route.request.resource_type in ("image", "media", "font")
+                       else route.continue_())
+            yield page
         finally:
             browser.close()
 
