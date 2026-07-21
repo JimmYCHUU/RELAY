@@ -16,8 +16,8 @@ FUZZY_HIGH = 0.90       # >= high  -> provenance "matched", tier "fuzzy"
 FUZZY_REVIEW = 0.75     # >= this  -> tier "review"
 PREFIX_MIN_LEN = 25     # min chars for truncated-title prefix matching
 
-# --- heuristic (SRS FR-13) ---
-K_MIN, K_MAX, K_DEFAULT = 70, 120, 95
+# --- heuristic (SRS FR-13; k randomized per cell, user can pin one) ---
+K_MIN, K_MAX, K_DEFAULT = 70, 150, 95
 
 # --- collector pacing (SRS NFR-6, hard account-safety budgets) ---
 PACE_MIN_S, PACE_MAX_S = 8.0, 15.0          # authenticated FB/MBS session — do not lower
@@ -31,6 +31,9 @@ SELECTORS = {
     "x_views": '[data-testid="app-text-transition-container"]',
     "fb_reactions": '[aria-label*="reaction"], [aria-label*="Like"] span',
     "mbs_post_views": '[data-testid="post_insights_views"]',
+    # the span FB renders the post's visible reaction total in (verified live
+    # 2026-07 on somoynews.tv permalinks) — update here when FB rotates it
+    "fb_reaction_count_class": "x135b78x",
 }
 
 

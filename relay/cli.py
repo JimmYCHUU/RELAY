@@ -32,8 +32,11 @@ def main(argv: list[str] | None = None) -> int:
                      help="Fill X impressions from public post pages (no login)")
     run.add_argument("--collect-fb", action="store_true",
                      help="Fill missing FB cells via Meta Business Suite session")
-    run.add_argument("--k", type=float, default=config.K_DEFAULT,
-                     help="Reactions multiplier for shared-post estimates (70-120)")
+    run.add_argument("--collect-ig", action="store_true",
+                     help="Fill missing Instagram cells from post pages (Meta session)")
+    run.add_argument("--k", type=float, default=None,
+                     help="Pin the reactions multiplier for estimates (70-150); "
+                          "default: randomized per cell")
     run.add_argument("--dry-run", action="store_true",
                      help="Collectors log intended visits without touching the network")
 
@@ -65,14 +68,16 @@ def main(argv: list[str] | None = None) -> int:
         args.campaign, args.sheet, args.brand,
         mainpage_path=args.mainpage, subpage_path=args.subpage, insta_path=args.insta,
     )
-    if args.collect_x or args.collect_fb:
+    if args.collect_x or args.collect_fb or args.collect_ig:
         from .collectors.base import Pacer
-        from .collectors.runner import collect_facebook, collect_x
+        from .collectors.runner import collect_facebook, collect_instagram, collect_x
         pacer = Pacer(dry_run=args.dry_run)
         if args.collect_x:
             print(f"X collector filled {collect_x(result, pacer)} cells")
         if args.collect_fb:
             print(f"FB collector filled {collect_facebook(result, args.k, pacer)} cells")
+        if args.collect_ig:
+            print(f"IG collector filled {collect_instagram(result, args.k, pacer)} cells")
     cov = result.coverage()
     print(f"{args.brand} {args.sheet}: {len(result.rows)} rows")
     for slot, frac in cov.items():

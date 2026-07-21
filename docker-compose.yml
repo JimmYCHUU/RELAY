@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        WITH_BROWSER: "0"   # set to "1" to bake in the collector browser
+        WITH_BROWSER: "1"   # bake in Chromium for the FB/X/IG collectors
     ports:
       - "8501:8501"
     volumes:

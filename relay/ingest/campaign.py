@@ -79,6 +79,17 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
                 continue
             empty_run = 0
 
+            # Some sheets keep an internal category-count row right under the
+            # header ("Jusika | 35 | Marshmallow | 35 | …"): text/numbers parked
+            # in the link columns, no No, no Date, no URL anywhere. Company-side
+            # bookkeeping, not campaign data — drop it from the run.
+            link_junk = any(_cell_str(row[i].value) for i in (3, 4, 5, 6, 7))
+            if (_cell_str(no) is None and not isinstance(date, datetime)
+                    and link_junk and not any(links) and not x_link and not ig_link):
+                issues.append(RowIssue(
+                    fname, r, "category-count row ignored (text in link columns, no URL/No/Date)"))
+                continue
+
             if not caption:
                 # a link is trackable on its own: the row stays, caption-matching
                 # is skipped, and collectors/manual entry fill the views —
@@ -102,7 +113,16 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
 
         for i, cr in enumerate(rows):
             if cr.date is None:
-                issues.append(RowIssue(fname, cr.source_row, "missing Date"))
+                # posts are chronological, so a blank Date inherits a neighbour's:
+                # previous row first, else the next row that has one
+                fill = next((rows[j].date for j in range(i - 1, -1, -1) if rows[j].date), None) \
+                    or next((rows[j].date for j in range(i + 1, len(rows)) if rows[j].date), None)
+                if fill is not None:
+                    cr.date = fill
+                    issues.append(RowIssue(
+                        fname, cr.source_row, f"empty Date filled from adjacent row ({fill:%-d %b})"))
+                else:
+                    issues.append(RowIssue(fname, cr.source_row, "missing Date"))
             if cr.no is None:
                 cr.no = (rows[i - 1].no + 1) if i and rows[i - 1].no is not None else i + 1
         return rows, issues

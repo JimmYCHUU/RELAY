@@ -89,18 +89,38 @@ def test_x_never_fabricated():
 
 # --- heuristic ---
 
-def test_estimate_default_k():
+def test_estimate_randomized_k():
+    # no pinned k -> a fresh multiplier in [70, 150] every call
+    values = [estimate_views(812).value for _ in range(40)]
+    assert all(812 * 70 <= v <= 812 * 150 + 9 for v in values)
+    assert len(set(values)) > 1, "k must vary between estimates"
     cv = estimate_views(812)
-    assert cv.value == 812 * 95
     assert cv.provenance == "estimated"
-    assert "k=95" in cv.note
+    assert "reactions=812" in cv.note and "k=" in cv.note
+
+
+def test_estimate_never_ends_in_0_or_5():
+    for reactions in (1, 7, 812, 4093):
+        for _ in range(20):
+            v = estimate_views(reactions).value
+            assert v % 10 in (1, 3, 7, 9), f"got {v}"
+    # pinned k gets the same last-digit treatment
+    assert estimate_views(100, k=100).value % 10 in (1, 3, 7, 9)
+
+
+def test_estimate_seeded_rng_reproducible():
+    import random
+    a = estimate_views(812, rng=random.Random(42))
+    b = estimate_views(812, rng=random.Random(42))
+    assert a.value == b.value and a.note == b.note
 
 
 def test_k_bounds():
     with pytest.raises(ValueError):
         estimate_views(10, k=50)
     with pytest.raises(ValueError):
-        estimate_views(10, k=121)
+        estimate_views(10, k=151)
+    estimate_views(10, k=150)  # new upper bound is valid
 
 
 def test_estimate_refuses_matched_cell():
@@ -108,4 +128,6 @@ def test_estimate_refuses_matched_cell():
     with pytest.raises(ValueError):
         apply_estimate(cell, reactions=10)
     # but fills a missing cell fine
-    assert apply_estimate(CellValue.missing(), reactions=10).value == 950
+    filled = apply_estimate(CellValue.missing(), reactions=10)
+    assert 10 * 70 <= filled.value <= 10 * 150 + 9
+    assert filled.value % 10 in (1, 3, 7, 9)

@@ -11,10 +11,10 @@ const state = {
   run: null,          // the ACTIVE run — all per-brand renderers read this
   dashSel: "all",     // dashboard scope: "all" | run index
   filter: "all",
-  reviewMode: "list", // "list" (master-detail) | "table"
+  reviewMode: "table", // "table" (flat row list, default) | "list" (master-detail)
   selectedRow: null,  // row.no highlighted in the list
   editing: null,      // {rowNo, slot}
-  collecting: { x: false, fb: false },  // both can run at once — independent browsers
+  collecting: { x: false, fb: false, ig: false },  // can run at once — independent browsers
   freshCells: new Set(),
 };
 
@@ -694,14 +694,16 @@ function recomputeCoverage() {
 }
 
 /* ═════════ collectors ═════════ */
-$("#kCollect").addEventListener("input", () => {
-  $("#kCollectOut").textContent = $("#kCollect").value;
-  $("#kLabel").textContent = $("#kCollect").value;
-});
 $("#collectX").addEventListener("click", () => startCollect("x"));
 $("#collectFB").addEventListener("click", () => startCollect("fb"));
+$("#collectIG").addEventListener("click", () => startCollect("ig"));
 
-const COLLECT_BTN = { x: "#collectX", fb: "#collectFB" };
+const COLLECT_BTN = { x: "#collectX", fb: "#collectFB", ig: "#collectIG" };
+const COLLECT_LABEL = {
+  x: "Scraping public X pages (politely paced)…",
+  fb: "Collecting Facebook via your Meta session…",
+  ig: "Collecting Instagram via your Meta session…",
+};
 function puEls(target) {
   const u = $(`.progress-unit[data-unit="${target}"]`);
   return { u, fill: $(".pu-fill", u), text: $(".pu-text", u),
@@ -712,7 +714,8 @@ async function startCollect(target) {
   if (!state.runs.length || state.collecting[target]) return;
   // always the batch endpoint: one browser session and one shared Pacer
   // budget across every brand in the cycle
-  const body = { run_ids: state.runs.map((r) => r.run_id), target, k: +$("#kCollect").value };
+  // no k: the server randomizes the multiplier (70–150×) per estimated cell
+  const body = { run_ids: state.runs.map((r) => r.run_id), target };
   const res = await fetch("/api/collect/batch", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
@@ -720,7 +723,7 @@ async function startCollect(target) {
   if (res.status === 412) {
     // No Meta session yet — open the sign-in browser automatically and
     // start collecting the moment the sign-in window is closed.
-    await metaSignInThenCollect();
+    await metaSignInThenCollect(target);
     return;
   }
   if (!res.ok) {
@@ -735,9 +738,7 @@ async function startCollect(target) {
   const el = puEls(target);
   el.u.hidden = false;
   el.fill.style.width = "0%";
-  el.text.textContent = target === "x"
-    ? "Scraping public X pages (politely paced)…"
-    : "Collecting Facebook via your Meta session…";
+  el.text.textContent = COLLECT_LABEL[target];
   el.count.textContent = "";
   el.log.innerHTML = "";
   el.stop.hidden = false;
@@ -810,13 +811,13 @@ $$(".pu-stop").forEach((b) => b.addEventListener("click", async () => {
 }));
 
 /* one-time Meta sign-in, launched straight from the Collect button */
-async function metaSignInThenCollect() {
+async function metaSignInThenCollect(target = "fb") {
   const res = await fetch("/api/login/meta", { method: "POST" });
   const errEl = $("#collectError");
   if (!res.ok) { errEl.textContent = await errText(res); errEl.hidden = false; return; }
   errEl.hidden = true;
   $("#collectProgress").hidden = false;
-  const el = puEls("fb");
+  const el = puEls(target);
   el.u.hidden = false;
   el.fill.style.width = "0%";
   el.count.textContent = "";
@@ -824,22 +825,23 @@ async function metaSignInThenCollect() {
   el.stop.hidden = true;
   el.text.textContent =
     "A browser window opened on this machine — sign in to Facebook / Meta Business Suite " +
+    (target === "ig" ? "and instagram.com " : "") +
     "(2FA is fine), then close that window. Collection starts automatically.";
-  $("#collectFB").disabled = true;
+  $(COLLECT_BTN[target]).disabled = true;
 
   const poll = async () => {
     const s = await (await fetch("/api/login/meta/status")).json();
     if (s.error) {
-      $("#collectFB").disabled = false;
+      $(COLLECT_BTN[target]).disabled = false;
       el.text.textContent = "Sign-in did not complete.";
       errEl.textContent = s.error;
       errEl.hidden = false;
       return;
     }
     if (s.ready) {
-      $("#collectFB").disabled = false;
-      el.text.textContent = "Signed in — starting Facebook collection…";
-      startCollect("fb");
+      $(COLLECT_BTN[target]).disabled = false;
+      el.text.textContent = "Signed in — starting collection…";
+      startCollect(target);
       return;
     }
     setTimeout(poll, 2000);
