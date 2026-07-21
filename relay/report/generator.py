@@ -78,7 +78,9 @@ def build_report(
     first_data = 3
     for i, r in enumerate(result.rows):
         excel_row = first_data + i
-        _write_cell(ws, excel_row, 1, r.no, F_DATA)
+        # Renumber sequentially: the source No is hand-filled and may repeat or
+        # be blank; the delivered report must carry a clean, unique No.
+        _write_cell(ws, excel_row, 1, i + 1, F_DATA)
         _write_cell(ws, excel_row, 2, r.date, F_DATA, fmt=DATE_FMT if r.date else None)
         _write_cell(ws, excel_row, 3, r.caption, F_DATA)
         for slot, (lc, vc) in SLOT_COLS.items():

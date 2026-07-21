@@ -103,7 +103,7 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
     return filled
 
 
-def collect_facebook(result: RunResult | list[RunResult], k: float,
+def collect_facebook(result: RunResult | list[RunResult], k: float | None = None,
                      pacer: Pacer | None = None,
                      headed: bool = False, progress: ProgressCb = None,
                      limit: int | None = None) -> int:
@@ -159,10 +159,11 @@ def collect_facebook(result: RunResult | list[RunResult], k: float,
                         filled += 1
                         p.log(f"{tag(run)}row {row.no} {slot}: {cell.value:,} views")
                     elif reactions:
+                        # k=None -> a fresh random multiplier for every cell
                         row.cells[slot] = estimate_views(reactions, k)
                         filled += 1
                         p.log(f"{tag(run)}row {row.no} {slot}: estimated "
-                              f"{row.cells[slot].value:,} (reactions {reactions:,} × {k:g})")
+                              f"{row.cells[slot].value:,} ({row.cells[slot].note})")
                     else:
                         p.log(f"{tag(run)}row {row.no} {slot}: {cell.note}")
                 except (BudgetExceeded, ChallengeDetected):
@@ -187,6 +188,85 @@ def collect_facebook(result: RunResult | list[RunResult], k: float,
     else:
         p.state = "finished"
         p.message = f"filled {filled} of {p.total} Facebook cells"
+    return filled
+
+
+def collect_instagram(result: RunResult | list[RunResult], k: float | None = None,
+                      pacer: Pacer | None = None,
+                      headed: bool = False, progress: ProgressCb = None,
+                      limit: int | None = None) -> int:
+    """Fill missing Instagram cells from post pages via the user's Meta
+    session (same persistent profile as Facebook). Reels carry a real view
+    count; photo posts fall back to likes × k estimation, marked ≈."""
+    from .browser import persistent_page
+    from .instagram import collect_ig_post, extract_ig_caption
+
+    runs = _as_runs(result)
+    tag = (lambda run: f"{run.brand} · ") if len(runs) > 1 else (lambda run: "")
+    pacer = pacer or Pacer()
+    p = progress or Progress()
+    targets = [(run, row) for run in runs for row in run.rows
+               if row.links.get("ig") and row.cells["ig"].value is None]
+    if limit is not None:
+        targets = targets[:limit]
+    p.total = len(targets)
+    if not targets:
+        p.state, p.message = "finished", "no missing Instagram cells"
+        return 0
+
+    if pacer.dry_run:
+        for _run, row in targets:
+            pacer.before_visit(row.links["ig"])
+            p.done += 1
+        p.state, p.message = "finished", f"dry-run: would visit {p.total} posts"
+        return 0
+
+    filled = 0
+    try:
+        with persistent_page("meta", headed=headed) as page:
+            for run, row in targets:
+                if p.stop_requested:
+                    break
+                url = row.links["ig"]
+                p.current = url
+                try:
+                    cell, likes = collect_ig_post(page, url, pacer)
+                    if not row.caption:
+                        cap = extract_ig_caption(page)
+                        if cap:
+                            row.caption = cap
+                            p.log(f"{tag(run)}row {row.no}: caption recovered from the post")
+                    if cell.value is not None:
+                        row.cells["ig"] = cell
+                        filled += 1
+                        p.log(f"{tag(run)}row {row.no}: {cell.value:,} views")
+                    elif likes:
+                        # k=None -> a fresh random multiplier for every cell
+                        row.cells["ig"] = estimate_views(likes, k)
+                        filled += 1
+                        p.log(f"{tag(run)}row {row.no}: estimated "
+                              f"{row.cells['ig'].value:,} ({row.cells['ig'].note})")
+                    else:
+                        p.log(f"{tag(run)}row {row.no}: {cell.note}")
+                except (BudgetExceeded, ChallengeDetected):
+                    raise
+                except Exception as exc:
+                    p.log(f"{tag(run)}row {row.no}: failed ({type(exc).__name__})")
+                finally:
+                    p.done += 1
+                p.filled = filled
+    except (BudgetExceeded, ChallengeDetected) as exc:
+        p.state, p.message = "stopped", str(exc)
+        return filled
+    except Exception as exc:
+        log.exception("instagram collection aborted")
+        p.state, p.message = "error", f"{type(exc).__name__}: {exc}"
+        return filled
+    if p.stop_requested:
+        p.state, p.message = "stopped", f"stopped — filled {filled} of {p.done} visited"
+    else:
+        p.state = "finished"
+        p.message = f"filled {filled} of {p.total} Instagram cells"
     return filled
 
 

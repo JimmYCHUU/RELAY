@@ -110,7 +110,8 @@ class CellReq(BaseModel):
 
 class EstimateReq(CellReq):
     reactions: int = Field(ge=0)
-    k: float = Field(default=config.K_DEFAULT, ge=config.K_MIN, le=config.K_MAX)
+    # None -> a fresh random k per estimated cell (the default behaviour)
+    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
 
 
 class OverrideReq(CellReq):
@@ -153,8 +154,9 @@ def override(req: OverrideReq) -> dict:
 
 class BatchCollectReq(BaseModel):
     run_ids: list[str] = Field(min_length=1)
-    target: str = Field(pattern="^(x|fb)$")
-    k: float = Field(default=config.K_DEFAULT, ge=config.K_MIN, le=config.K_MAX)
+    target: str = Field(pattern="^(x|fb|ig)$")
+    # None -> a fresh random k per estimated cell (the default behaviour)
+    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
     dry_run: bool = False
 
 
@@ -168,14 +170,15 @@ def collect_batch(req: BatchCollectReq) -> dict:
     import threading
 
     from ..collectors.base import Pacer
-    from ..collectors.runner import (Progress, collect_facebook, collect_x,
+    from ..collectors.runner import (Progress, collect_facebook,
+                                     collect_instagram, collect_x,
                                      meta_profile_exists)
 
     results = [_get_run(rid) for rid in req.run_ids]
     existing = _batch_jobs.get(req.target)
     if existing and existing.state == "running":
         raise HTTPException(409, "collection already running for this target")
-    if req.target == "fb" and not req.dry_run and not meta_profile_exists():
+    if req.target in ("fb", "ig") and not req.dry_run and not meta_profile_exists():
         raise HTTPException(412, "meta-session-required")
 
     progress = Progress()
@@ -186,6 +189,9 @@ def collect_batch(req: BatchCollectReq) -> dict:
             pacer = Pacer(min_delay=config.X_PACE_MIN_S,
                           max_delay=config.X_PACE_MAX_S, dry_run=req.dry_run)
             collect_x(results, pacer=pacer, progress=progress)
+        elif req.target == "ig":
+            pacer = Pacer(dry_run=req.dry_run)
+            collect_instagram(results, req.k, pacer=pacer, progress=progress)
         else:
             pacer = Pacer(dry_run=req.dry_run)
             collect_facebook(results, req.k, pacer=pacer, progress=progress)
@@ -321,8 +327,9 @@ def meta_login_status() -> dict:
 
 class CollectReq(BaseModel):
     run_id: str
-    target: str = Field(pattern="^(x|fb)$")
-    k: float = Field(default=config.K_DEFAULT, ge=config.K_MIN, le=config.K_MAX)
+    target: str = Field(pattern="^(x|fb|ig)$")
+    # None -> a fresh random k per estimated cell (the default behaviour)
+    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
     dry_run: bool = False
 
 
@@ -334,7 +341,8 @@ def collect(req: CollectReq) -> dict:
     import threading
 
     from ..collectors.base import Pacer
-    from ..collectors.runner import (Progress, collect_facebook, collect_x,
+    from ..collectors.runner import (Progress, collect_facebook,
+                                     collect_instagram, collect_x,
                                      meta_profile_exists)
 
     result = _get_run(req.run_id)
@@ -342,7 +350,7 @@ def collect(req: CollectReq) -> dict:
     existing = _jobs.get(key)
     if existing and existing.state == "running":
         raise HTTPException(409, "collection already running for this run")
-    if req.target == "fb" and not req.dry_run and not meta_profile_exists():
+    if req.target in ("fb", "ig") and not req.dry_run and not meta_profile_exists():
         # 412 → the dashboard auto-opens the sign-in browser via /api/login/meta
         raise HTTPException(412, "meta-session-required")
 
@@ -354,6 +362,9 @@ def collect(req: CollectReq) -> dict:
             pacer = Pacer(min_delay=config.X_PACE_MIN_S,
                           max_delay=config.X_PACE_MAX_S, dry_run=req.dry_run)
             collect_x(result, pacer=pacer, progress=progress)
+        elif req.target == "ig":
+            pacer = Pacer(dry_run=req.dry_run)
+            collect_instagram(result, req.k, pacer=pacer, progress=progress)
         else:
             pacer = Pacer(dry_run=req.dry_run)
             collect_facebook(result, req.k, pacer=pacer, progress=progress)

@@ -49,8 +49,17 @@ def test_estimate_and_override(client, run_id):
     res = client.post("/api/estimate", json={
         "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 812, "k": 95})
     assert res.status_code == 200
-    assert res.json() == {"value": 77140, "provenance": "estimated",
-                          "confidence": 0.5, "note": "reactions=812, k=95"}
+    body = res.json()
+    # 812 × 95 = 77140, then the last digit is nudged onto 1/3/7/9
+    assert abs(body["value"] - 77140) < 10 and body["value"] % 10 in (1, 3, 7, 9)
+    assert body["provenance"] == "estimated" and body["confidence"] == 0.5
+    assert body["note"] == "reactions=812, k=95"
+    # omitting k entirely randomizes it within [70, 150]
+    res2 = client.post("/api/estimate", json={
+        "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 812})
+    assert res2.status_code == 200
+    v2 = res2.json()["value"]
+    assert 812 * 70 <= v2 <= 812 * 150 + 9 and v2 % 10 in (1, 3, 7, 9)
     # k out of bounds rejected
     bad = client.post("/api/estimate", json={
         "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 10, "k": 50})

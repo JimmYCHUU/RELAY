@@ -9,6 +9,24 @@ from pathlib import Path
 from . import config
 from .models import RunResult
 
+# row_no is intentionally NOT unique: campaign sheets are hand-filled, so No
+# can repeat or be blank. Row identity for the audit log is positional, not the
+# human No — the report generator is what guarantees a unique No in the output.
+_CELLS_COLUMNS = "run_id, row_no, slot, link, value, provenance, confidence, note"
+_CELLS_DDL = """
+CREATE TABLE IF NOT EXISTS cells (
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    row_no INTEGER,
+    slot TEXT NOT NULL,
+    link TEXT,
+    value INTEGER,
+    provenance TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_cells_key ON cells (run_id, row_no, slot);
+"""
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,17 +38,7 @@ CREATE TABLE IF NOT EXISTS runs (
     status TEXT NOT NULL DEFAULT 'matched',
     summary TEXT
 );
-CREATE TABLE IF NOT EXISTS cells (
-    run_id INTEGER NOT NULL REFERENCES runs(id),
-    row_no INTEGER NOT NULL,
-    slot TEXT NOT NULL,
-    link TEXT,
-    value INTEGER,
-    provenance TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    note TEXT,
-    PRIMARY KEY (run_id, row_no, slot)
-);
+""" + _CELLS_DDL + """
 CREATE TABLE IF NOT EXISTS overrides (
     run_id INTEGER NOT NULL REFERENCES runs(id),
     row_no INTEGER NOT NULL,
@@ -51,7 +59,26 @@ def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
         conn.execute("ALTER TABLE runs ADD COLUMN summary TEXT")
     except sqlite3.OperationalError:
         pass
+    _migrate_cells(conn)
     return conn
+
+
+def _migrate_cells(conn: sqlite3.Connection) -> None:
+    """Older DBs keyed cells on PRIMARY KEY (run_id, row_no, slot), which
+    assumes a unique No per row. A repeated or blank No then crashed save_run
+    with an IntegrityError. Rebuild the table without the constraint, preserving
+    history (legacy rows had unique No, so they copy over cleanly)."""
+    info = conn.execute("PRAGMA table_info(cells)").fetchall()
+    if not (info and any(col[5] for col in info)):  # col[5] = pk flag
+        return
+    conn.executescript(
+        "DROP INDEX IF EXISTS ix_cells_key;\n"
+        "ALTER TABLE cells RENAME TO cells_legacy;\n"
+        + _CELLS_DDL
+        + f"INSERT INTO cells ({_CELLS_COLUMNS}) "
+          f"SELECT {_CELLS_COLUMNS} FROM cells_legacy;\n"
+        "DROP TABLE cells_legacy;\n"
+    )
 
 
 def _summarize(result: RunResult) -> str:

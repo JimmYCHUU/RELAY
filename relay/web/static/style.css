@@ -14,9 +14,12 @@
   --grid: #e6e8ef;
   --baseline: #d3d6e0;
   --ring: rgba(20, 22, 31, 0.06);
-  --accent: #4353e8;            /* indigo — UI actions */
-  --accent-strong: #3543c9;
-  --accent-soft: rgba(67, 83, 232, 0.09);
+  --brand: #ef5a2e;             /* coral — brand identity (logo, warm accents) */
+  --brand-strong: #d8481f;
+  --brand-soft: rgba(239, 90, 46, 0.10);
+  --accent: #0fa891;            /* teal — UI actions */
+  --accent-strong: #0c8f7c;
+  --accent-soft: rgba(15, 168, 145, 0.10);
   --fb: #2a78d6;                /* series: Facebook (palette blue) */
   --fb-soft: rgba(42, 120, 214, 0.10);
   --igc: #e87ba4;               /* series: Instagram (palette magenta) */
@@ -52,9 +55,12 @@
   --grid: #2b2e3c;
   --baseline: #454960;
   --ring: rgba(255, 255, 255, 0.09);
-  --accent: #6272f1;
-  --accent-strong: #7c8af5;
-  --accent-soft: rgba(98, 114, 241, 0.16);
+  --brand: #ff7a52;
+  --brand-strong: #ff916f;
+  --brand-soft: rgba(255, 122, 82, 0.16);
+  --accent: #2cc4a8;
+  --accent-strong: #4dd4bb;
+  --accent-soft: rgba(44, 196, 168, 0.16);
   --fb: #3987e5;
   --fb-soft: rgba(57, 135, 229, 0.14);
   --igc: #d55181;
@@ -112,9 +118,9 @@ body {
 }
 .rail-logo {
   display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  background: linear-gradient(135deg, var(--brand), var(--brand-strong));
   color: #fff; font-weight: 800; font-size: 20px; text-decoration: none;
-  box-shadow: 0 4px 14px rgba(67,83,232,.35);
+  box-shadow: 0 4px 14px rgba(239,90,46,.35);
 }
 .rail-nav { display: flex; flex-direction: column; gap: 6px; }
 .nav-item {
@@ -200,7 +206,7 @@ button .ic-svg, a.ghost .ic-svg { width: 16px; height: 16px; }
 button.lg, a.lg { padding: 12px 22px; font-size: 15px; }
 button.primary {
   background: var(--accent); color: #fff;
-  box-shadow: 0 4px 14px rgba(67,83,232,.28);
+  box-shadow: 0 4px 14px rgba(15,168,145,.30);
 }
 button.primary:not([disabled]):hover { background: var(--accent-strong); transform: translateY(-1px); }
 button.primary[disabled] {
@@ -408,7 +414,7 @@ input:disabled, select:disabled {
   flex-shrink: 0;
 }
 .kpi-ic .ic-svg { width: 21px; height: 21px; }
-.ic-indigo { background: var(--accent-soft); color: var(--accent); }
+.ic-indigo { background: var(--brand-soft); color: var(--brand); }
 .ic-blue { background: var(--fb-soft); color: var(--fb); }
 .ic-green { background: var(--good-soft); color: var(--good-text); }
 .ic-pink { background: var(--ig-soft); color: var(--igc); }
@@ -546,7 +552,7 @@ input:disabled, select:disabled {
   background: var(--surface); border: 1px solid var(--grid); border-radius: 14px;
   padding: 14px 16px; box-shadow: var(--shadow); position: relative; overflow: hidden;
 }
-.tile::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--accent); opacity: .7; }
+.tile::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--brand); opacity: .7; }
 .tile.warn::before { background: var(--critical); }
 .tile .t-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
 .tile .t-value { font-size: 25px; font-weight: 750; margin-top: 4px; letter-spacing: -0.01em; }
@@ -563,8 +569,6 @@ input:disabled, select:disabled {
 .collect-title .ic-svg { width: 16px; height: 16px; }
 .collect-card p { margin: 0 0 12px; font-size: 13px; color: var(--ink-2); }
 .collect-fb-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.k-inline { display: flex; flex-direction: row !important; align-items: center; gap: 8px; }
-.k-inline input[type="range"] { width: 110px; min-width: 0; accent-color: var(--accent); }
 .collect-progress { margin-top: 16px; display: flex; flex-direction: column; gap: 16px; }
 .progress-head {
   display: flex; justify-content: space-between; align-items: center;

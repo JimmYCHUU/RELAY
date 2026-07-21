@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RELAY — Sponsored Content Reporting</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%234353e8'/><path d='M30 72V28h22a14 14 0 0 1 0 28H41l17 16h-15L30 60' fill='white'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23ef5a2e'/><path d='M30 72V28h22a14 14 0 0 1 0 28H41l17 16h-15L30 60' fill='white'/></svg>">
 <script>
 /* theme before first paint — light is the product default, dark is a choice */
 document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || "light";
@@ -227,9 +227,9 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <p class="hint">Supervisor-file matches are filled in. Collectors scrape the rest —
     or click any cell to fix it yourself.</p>
     <div class="seg-icons" role="group" aria-label="Layout">
-      <button class="segbtn active" id="modeList" title="List &amp; detail" aria-label="List and detail view">
+      <button class="segbtn" id="modeList" title="List &amp; detail" aria-label="List and detail view">
         <svg class="ic-svg"><use href="#i-rows"/></svg></button>
-      <button class="segbtn" id="modeTable" title="Table" aria-label="Table view">
+      <button class="segbtn active" id="modeTable" title="Table" aria-label="Table view">
         <svg class="ic-svg"><use href="#i-table"/></svg></button>
     </div>
   </header>
@@ -252,14 +252,20 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       <div class="collect-card">
         <div class="collect-title"><svg class="ic-svg"><use href="#i-facebook"/></svg> Facebook missing cells</div>
         <p>Uses the Meta session from <strong>Accounts</strong>. Shared posts are resolved
-           to the original post and read as <strong>real views</strong> — reactions × <span id="kLabel">95</span>
-           is only the last resort when no views figure is visible, and those cells
-           are marked ≈.</p>
+           to the original post and read as <strong>real views</strong> — a reactions
+           estimate (random 70–150× per post) is only the last resort when no views
+           figure is visible, and those cells are marked ≈.</p>
         <div class="collect-fb-row">
           <button id="collectFB" class="primary">Collect Facebook</button>
-          <label class="k-inline">k <input id="kCollect" type="range" min="70" max="120" value="95">
-            <output id="kCollectOut">95</output></label>
         </div>
+      </div>
+      <div class="collect-card">
+        <div class="collect-title"><svg class="ic-svg"><use href="#i-camera"/></svg> Instagram missing cells</div>
+        <p>Reads each post page through the same Meta session — reels report
+           <strong>real views</strong>; photo posts have no view figure, so likes ×
+           a random 70–150 multiplier fills them, marked ≈. Handy when there is
+           no supervisor match file at all.</p>
+        <button id="collectIG" class="primary">Collect Instagram</button>
       </div>
     </div>
     <div id="collectProgress" class="collect-progress" hidden>
@@ -287,6 +293,18 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <div class="progress-meta"><span class="pu-text">Starting…</span></div>
         <ul class="progress-log pu-log"></ul>
       </div>
+      <div class="progress-unit" data-unit="ig" hidden>
+        <div class="progress-head">
+          <strong><svg class="ic-svg"><use href="#i-camera"/></svg> Instagram</strong>
+          <span class="progress-right">
+            <span class="pu-count"></span>
+            <button class="ghost stop-btn pu-stop" data-target="ig">Stop</button>
+          </span>
+        </div>
+        <div class="progress-track"><div class="progress-fill pu-fill"></div></div>
+        <div class="progress-meta"><span class="pu-text">Starting…</span></div>
+        <ul class="progress-log pu-log"></ul>
+      </div>
     </div>
     <p id="collectError" class="error" hidden></p>
   </div>
@@ -308,11 +326,11 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <button class="tab chip-filter" data-filter="attention">Needs attention <span class="count" id="countAttn"></span></button>
       </div>
     </div>
-    <div id="reviewSplit" class="review-split">
+    <div id="reviewSplit" class="review-split" hidden>
       <div class="rlist" id="reviewList"></div>
       <div class="rdetail" id="reviewDetail"></div>
     </div>
-    <div class="table-wrap" id="tableWrap" hidden>
+    <div class="table-wrap" id="tableWrap">
       <table id="reviewTable">
         <thead>
           <tr>
@@ -437,9 +455,10 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <input id="reactions" type="number" min="0" placeholder="e.g. 812">
       </label>
       <label>Multiplier k <output id="kOut">95</output>
-        <input id="kSlider" type="range" min="70" max="120" value="95">
+        <input id="kSlider" type="range" min="70" max="150" value="95">
       </label>
-      <p class="hint">views ≈ reactions × k &nbsp;(your 70–120 heuristic)</p>
+      <p class="hint">views ≈ reactions × k &nbsp;(70–150; the last digit is
+        auto-nudged so estimates never end in 0 or 5)</p>
     </div>
     <div class="tab-pane" data-pane="manual" hidden>
       <label>Views value
