@@ -1,5 +1,7 @@
 # ── sensitive: user-provided originals never leave this machine
 *.xlsx
+# Business Suite insights exports — per-post reach/views for whole pages
+*.csv
 .~lock.*
 data/
 System Design Request.md

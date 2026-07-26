@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Optional
 
 from .ingest.campaign import parse_campaign
+from .ingest.insights import InsightsIndex, build_index
 from .ingest.supervisor import parse_matched
 from .matching.engine import match_rows
 from .models import Match, RunResult
+from .resolve.insights_fill import fill_from_insights, reassign_subpage_slots
 from .resolve.rules import build_row
 
 
@@ -18,6 +20,7 @@ def run_pipeline(
     mainpage_path: Optional[str | Path] = None,
     subpage_path: Optional[str | Path] = None,
     insta_path: Optional[str | Path] = None,
+    insights_paths: Optional[list[str | Path]] = None,
 ) -> RunResult:
     campaign, issues = parse_campaign(campaign_path, sheet)
 
@@ -45,4 +48,18 @@ def run_pipeline(
             "instagram": insta.tier if insta else "n/a",
         }
 
-    return RunResult(brand=brand, month=sheet, rows=rows, issues=issues, match_tiers=tiers)
+    result = RunResult(brand=brand, month=sheet, rows=rows, issues=issues, match_tiers=tiers)
+
+    # Meta's own figures fill what the supervisor file couldn't — before any
+    # estimate is ever considered. Share links need a browser to resolve, so
+    # those are left to the collector, which re-checks this same index.
+    result.insights = build_index(insights_paths)
+    issues.extend(result.insights.issues)
+    if len(result.insights):
+        # First put the supervisor's own values on the right slots — their
+        # Views_Match_N order does not track Link 2/Link 3 (FR-10a) — then fill
+        # what they had nothing for.
+        reassign_subpage_slots(result, result.insights)
+        fill_from_insights(result, result.insights)
+
+    return result

@@ -63,6 +63,33 @@ class MatchedFile:
 
 
 @dataclass
+class InsightsRow:
+    """One post as Meta's own Business Suite content export reports it.
+
+    These figures are exact integers straight from Meta — never routed through
+    `collectors.base.parse_compact_number`, which invents trailing digits for
+    compact "45.2K" display strings.
+    """
+    post_id: str
+    permalink: str
+    page_id: str = ""
+    page_name: str = ""
+    title: str = ""                     # the post's own caption, for the fuzzy fallback
+    published: Optional[datetime] = None
+    views: Optional[int] = None
+    reach: Optional[int] = None
+    reactions: Optional[int] = None
+    post_type: str = ""
+    is_share: bool = False
+    source_file: str = ""
+    source_row: int = 0
+
+    def metric(self, name: str) -> Optional[int]:
+        """The configured headline figure ('reach' or 'views')."""
+        return self.reach if name == "reach" else self.views
+
+
+@dataclass
 class Match:
     matched: Optional[MatchedRow]
     tier: MatchTier
@@ -100,6 +127,10 @@ class RunResult:
     rows: list[ReportRow]
     issues: list[RowIssue] = field(default_factory=list)
     match_tiers: dict[int, dict[str, str]] = field(default_factory=dict)
+    # ingest.insights.InsightsIndex, attached by run_pipeline. Left untyped to
+    # keep models.py free of an import cycle (insights.py imports InsightsRow
+    # from here). Collectors reuse it to look up shares once resolved.
+    insights: object | None = None
 
     def coverage(self) -> dict[str, float]:
         """Fraction of linked slots that have a value, per slot."""

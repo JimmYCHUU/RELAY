@@ -26,6 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--mainpage")
     run.add_argument("--subpage")
     run.add_argument("--insta")
+    run.add_argument("--insights", action="append", metavar="EXPORT",
+                     help="Meta Business Suite content export (.csv/.xlsx) — exact "
+                          "Reach/Views per post. Repeat once per page.")
     run.add_argument("--out", help="Output .xlsx path")
     run.add_argument("--reference", help="Existing hand-made report to cross-check against")
     run.add_argument("--collect-x", action="store_true",
@@ -35,8 +38,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--collect-ig", action="store_true",
                      help="Fill missing Instagram cells from post pages (Meta session)")
     run.add_argument("--k", type=float, default=None,
-                     help="Pin the reactions multiplier for estimates (70-150); "
-                          "default: randomized per cell")
+                     help=f"Pin the reactions multiplier for estimates "
+                          f"({config.K_MIN:g}-{config.K_MAX:g}); default: fitted from "
+                          f"--insights data when available, else randomized per cell")
     run.add_argument("--dry-run", action="store_true",
                      help="Collectors log intended visits without touching the network")
 
@@ -67,17 +71,39 @@ def main(argv: list[str] | None = None) -> int:
     result = run_pipeline(
         args.campaign, args.sheet, args.brand,
         mainpage_path=args.mainpage, subpage_path=args.subpage, insta_path=args.insta,
+        insights_paths=args.insights,
     )
+    if args.insights:
+        index = result.insights
+        n_filled = sum(1 for r in result.rows for s in ("fb1", "fb2", "fb3")
+                       if r.cells[s].provenance == "collected")
+        print(f"insights export: {len(index):,} posts loaded from "
+              f"{len(index.files)} file(s); {n_filled} Facebook cells filled exactly")
     if args.collect_x or args.collect_fb or args.collect_ig:
+        from . import store
         from .collectors.base import Pacer
         from .collectors.runner import collect_facebook, collect_instagram, collect_x
         pacer = Pacer(dry_run=args.dry_run)
+        persist = None
+        if not args.dry_run:
+            # resume: inherit checkpointed values from a previous run of the
+            # same inputs, then checkpoint this run's cells as they land
+            inputs = {"campaign": args.campaign, "sheet": args.sheet, "brand": args.brand}
+            prev_id = store.find_resumable_run(inputs)
+            if prev_id:
+                restored = store.hydrate_cells(result, store.load_cells(prev_id))
+                if restored:
+                    print(f"resumed: {restored} previously collected cells restored")
+            db_id = store.save_run(result, inputs)
+
+            def persist(run, row_idx, slot, cell):
+                store.update_cell(db_id, row_idx, slot, cell)
         if args.collect_x:
-            print(f"X collector filled {collect_x(result, pacer)} cells")
+            print(f"X collector filled {collect_x(result, pacer, persist=persist)} cells")
         if args.collect_fb:
-            print(f"FB collector filled {collect_facebook(result, args.k, pacer)} cells")
+            print(f"FB collector filled {collect_facebook(result, args.k, pacer, persist=persist)} cells")
         if args.collect_ig:
-            print(f"IG collector filled {collect_instagram(result, args.k, pacer)} cells")
+            print(f"IG collector filled {collect_instagram(result, args.k, pacer, persist=persist)} cells")
     cov = result.coverage()
     print(f"{args.brand} {args.sheet}: {len(result.rows)} rows")
     for slot, frac in cov.items():
@@ -86,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ! {issue.file} row {issue.row}: {issue.reason}", file=sys.stderr)
 
     out = Path(args.out) if args.out else config.OUTPUT_DIR / f"{args.brand} ({args.sheet}).xlsx"
-    build_report(result, out)
+    build_report(result, out, campaign_path=args.campaign)
     print(f"report written: {out}")
 
     if args.reference:

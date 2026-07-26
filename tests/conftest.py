@@ -16,6 +16,11 @@ WP_INSTA = SAMPLES / "white plus insta matched (3).xlsx"
 ALL_MAIN_APRIL = SAMPLES / "April social card mainpage matched.xlsx"
 ALL_MAIN_PENDING = SAMPLES / "Pendding social card mainpage matched.xlsx"
 ALL_SUB_PENDING = SAMPLES / "pending social card subpage matched (1).xlsx"
+# A real Business Suite content export (Somoy Shongbad, 1-15 Jul 2026). Like the
+# workbooks above it holds live data and is git-ignored, so tests that use it
+# skip when it is absent — the synthetic fixtures in test_insights.py cover the
+# same behaviour without it.
+INSIGHTS_EXPORT = SAMPLES / "Jul-01-2026_Jul-15-2026_1405585348144457.csv"
 
 
 def pytest_collection_modifyitems(config, items):

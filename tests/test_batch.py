@@ -69,3 +69,38 @@ def test_batch_collect_unknown_run_is_404(client):
     res = client.post("/api/collect/batch", json={
         "run_ids": ["nope"], "target": "x", "dry_run": True})
     assert res.status_code == 404
+
+
+def test_autopilot_dry_run_completes_campaigns_in_load_order(client, two_runs):
+    res = client.post("/api/autopilot", json={"run_ids": two_runs, "dry_run": True})
+    assert res.status_code == 200
+    assert res.json()["campaigns"] == 2
+    s = {"state": "running"}
+    for _ in range(100):
+        s = client.get(f"/api/autopilot/status?ids={','.join(two_runs)}").json()
+        if s["state"] in ("finished", "error", "stopped"):
+            break
+        time.sleep(0.1)
+    assert s["state"] == "finished", s
+    assert set(s["runs"]) == set(two_runs)
+    assert "autopilot done" in s["message"]
+    # campaign-major order: all of brand 1's platform passes before brand 2's
+    brands = [e.split(" · ")[0] for e in s["events"]]
+    assert brands == ["White Plus"] * 3 + ["Fresh Gel"] * 3
+
+
+def test_autopilot_checks_meta_session_upfront(client, two_runs, tmp_path, monkeypatch):
+    from relay import config
+    monkeypatch.setattr(config, "PROFILE_DIR", tmp_path / "no-profiles")
+    res = client.post("/api/autopilot", json={"run_ids": two_runs})
+    assert res.status_code == 412
+    assert res.json()["detail"] == "meta-session-required"
+
+
+def test_autopilot_unknown_run_is_404(client):
+    res = client.post("/api/autopilot", json={"run_ids": ["nope"], "dry_run": True})
+    assert res.status_code == 404
+
+
+def test_autopilot_stop_when_idle(client):
+    assert client.post("/api/autopilot/stop").json() == {"stopping": False}

@@ -67,6 +67,29 @@ def test_parse_compact_number_seeded():
     assert a == b
 
 
+def test_views_regex_rejects_year_fusion():
+    # "Jul 24, 2026,290 Views" — the year fused to the real count once parsed
+    # as 2026290 views. It must be rejected outright now, not misread.
+    assert extract_views_from_text("3:12 PM · Jul 24, 2026,290 Views") is None
+    assert extract_views_from_text("Jul 24, 2026 · 2,290 Views") == 2290
+
+
+def test_fb_ig_views_regex_rejects_year_fusion():
+    from relay.collectors.instagram import extract_ig_views
+    from relay.collectors.mbs import _VIEWS_TEXT
+    assert _VIEWS_TEXT.search("Jul 24, 2026,290 views") is None
+    m = _VIEWS_TEXT.search("somoy 76.4K views today")
+    assert m and m.group(1) == "76.4K"
+    assert extract_ig_views("<div>2026,290 views</div>") is None
+    assert 12500 <= extract_ig_views("<div>12.5K views</div>") < 12600
+
+
+def test_parse_compact_number_grouping():
+    assert parse_compact_number("2026,290") is None      # fused year+count
+    assert parse_compact_number("2,026,290") == 2026290  # valid grouping
+    assert parse_compact_number("2,290") == 2290
+
+
 def test_x_status_id_and_views():
     assert status_id("https://x.com/somoytv/status/2047324211?s=20") == "2047324211"
     assert status_id("https://x.com/somoytv") is None
@@ -232,7 +255,7 @@ def test_fb_views_below_reactions_rejected():
     from relay.collectors.mbs import collect_fb_post
     p, _ = make_pacer(budget=5)
     html = "<div>190 views</div><div>Rahim and 412 others reactions</div>"
-    cell, reactions = collect_fb_post(FakeFBPage(html), "https://facebook.com/p/1", p)
+    cell, reactions, _ = collect_fb_post(FakeFBPage(html), "https://facebook.com/p/1", p)
     assert cell.value is None and cell.provenance == "missing"
     assert reactions == 412
 
@@ -242,7 +265,7 @@ def test_fb_views_skips_implausible_candidate():
     p, _ = make_pacer(budget=5)
     html = ("<div>190 views</div><div>Rahim and 412 others reactions</div>"
             "<div>45.2K views</div>")
-    cell, reactions = collect_fb_post(FakeFBPage(html), "https://facebook.com/p/2", p)
+    cell, reactions, _ = collect_fb_post(FakeFBPage(html), "https://facebook.com/p/2", p)
     assert 45200 <= cell.value < 45300 and cell.provenance == "collected"
     assert reactions == 412
 
@@ -254,7 +277,7 @@ def test_fb_live_counter_beats_json_garbage():
     p, _ = make_pacer(budget=5)
     html = '{"reaction_count":{"count":329}}{"reaction_count":{"count":405}}'
     page = FakeFBPageWithCounter(html, "199")
-    cell, reactions = collect_fb_post(page, "https://facebook.com/p/9", p)
+    cell, reactions, _ = collect_fb_post(page, "https://facebook.com/p/9", p)
     assert reactions == 199
     assert cell.value is None  # no views figure -> estimate fallback from 199
 
@@ -262,7 +285,7 @@ def test_fb_live_counter_beats_json_garbage():
 def test_fb_views_plain_accepted_without_reactions():
     from relay.collectors.mbs import collect_fb_post
     p, _ = make_pacer(budget=5)
-    cell, reactions = collect_fb_post(
+    cell, reactions, _ = collect_fb_post(
         FakeFBPage("<div>12K views</div>"), "https://facebook.com/p/3", p)
     assert 12000 <= cell.value < 13000 and reactions is None
 
@@ -315,3 +338,144 @@ def test_ig_dry_run_no_browser(april_result):
     filled = collect_instagram(april_result, pacer=p, progress=prog)
     assert filled == 0 and p.visits > 0
     assert prog.state == "finished" and prog.done == prog.total > 0
+
+
+# --- the estimate is genuinely the last resort (runner wiring) ---
+
+class _FakeSession:
+    def __init__(self, page):
+        self._page = page
+
+    def page(self):
+        return self._page
+
+
+def _patch_fb_collector(monkeypatch, *, views=None, reactions=None, post_id=None,
+                        resolved="https://www.facebook.com/p/canonical"):
+    """Stand in for the browser so the runner's decision logic can be tested."""
+    from contextlib import contextmanager
+
+    from relay.collectors import browser, mbs
+    from relay.models import CellValue
+
+    @contextmanager
+    def fake_session(_profile, headed=False, recycle_every=None):
+        yield _FakeSession(object())
+
+    monkeypatch.setattr(browser, "persistent_session", fake_session)
+    monkeypatch.setattr(mbs, "resolve_share_link", lambda page, url, pacer: resolved)
+    monkeypatch.setattr(mbs, "extract_caption", lambda page: None)
+    monkeypatch.setattr(
+        mbs, "collect_fb_post",
+        lambda page, url, pacer: (
+            CellValue(views, "collected", 1.0, "post page views figure") if views
+            else CellValue.missing("no views figure"), reactions, post_id))
+
+
+def _one_row_run(link):
+    from relay.models import CellValue, ReportRow, RunResult
+    row = ReportRow(
+        no=1, date=None, caption="", 
+        links={"fb1": link, "fb2": None, "fb3": None, "x": None, "ig": None},
+        cells={s: CellValue.missing() for s in ("fb1", "fb2", "fb3", "x", "ig")})
+    return RunResult(brand="B", month="July", rows=[row])
+
+
+def test_resolved_share_prefers_the_export_over_an_estimate(monkeypatch, tmp_path):
+    """The exact case the multiplier was invented for: a share/p link. Once
+    resolved, the export almost always has it — and must win."""
+    from relay.collectors.runner import collect_facebook
+    from relay.ingest.insights import build_index
+
+    canonical = "https://www.facebook.com/somoysongbad360/posts/pfbid0CCC"
+    csv = tmp_path / "e.csv"
+    csv.write_text(
+        '"Post ID",Permalink,Views,Reach,Reactions\n'
+        f'1003,{canonical},4611,2892,5\n', encoding="utf-8-sig")
+
+    run = _one_row_run("https://www.facebook.com/share/p/abc/")
+    run.insights = build_index([csv])
+    _patch_fb_collector(monkeypatch, views=None, reactions=5, resolved=canonical)
+
+    p, _ = make_pacer(budget=10)
+    assert collect_facebook(run, pacer=p) == 1
+    cell = run.rows[0].cells["fb1"]
+    assert cell.value == 4611 and cell.provenance == "collected"   # Views
+    assert "insights export" in cell.note
+
+
+def test_estimate_fires_only_when_the_export_has_nothing(monkeypatch, tmp_path):
+    from relay.collectors.runner import collect_facebook
+    from relay.ingest.insights import build_index
+
+    csv = tmp_path / "e.csv"
+    csv.write_text(
+        '"Post ID",Permalink,Views,Reach,Reactions\n'
+        '1,https://www.facebook.com/other/posts/pfbid0ZZZ,100,90,1\n',
+        encoding="utf-8-sig")
+
+    run = _one_row_run("https://www.facebook.com/share/p/abc/")
+    run.insights = build_index([csv])
+    _patch_fb_collector(monkeypatch, views=None, reactions=40,
+                        resolved="https://www.facebook.com/mine/posts/pfbid0QQQ")
+
+    p, _ = make_pacer(budget=10)
+    assert collect_facebook(run, pacer=p) == 1
+    assert run.rows[0].cells["fb1"].provenance == "estimated"
+
+
+def test_zero_reaction_post_is_left_missing_not_zeroed(monkeypatch):
+    """A share with no reactions used to produce 0. A blank is honest; 0 is not."""
+    from relay.collectors.runner import collect_facebook
+
+    run = _one_row_run("https://www.facebook.com/mine/posts/pfbid0AAA")
+    _patch_fb_collector(monkeypatch, views=None, reactions=0)
+
+    p, _ = make_pacer(budget=10)
+    assert collect_facebook(run, pacer=p) == 0
+    assert run.rows[0].cells["fb1"].value is None
+
+
+def test_post_id_join_rescues_a_mainpage_post(monkeypatch, tmp_path):
+    """Mainpage posts rewrite the photocard's headline and carry a different
+    pfbid from the export, so neither caption nor URL can join them. Meta's
+    numeric post id — read off the live page — is the only key that works."""
+    from relay.collectors.runner import collect_facebook
+    from relay.ingest.insights import build_index
+
+    csv = tmp_path / "e.csv"
+    csv.write_text(
+        '"Post ID",Permalink,Title,Views,Reach,Reactions\n'
+        '778899,https://www.facebook.com/somoynews.tv/posts/pfbid0DIFFERENT,'
+        '"a completely rewritten mainpage headline",161460,108179,1126\n',
+        encoding="utf-8-sig")
+
+    run = _one_row_run("https://www.facebook.com/somoynews.tv/posts/pfbid0FROMSHEET")
+    run.rows[0].caption = "the photocard caption, which does not match the headline"
+    run.insights = build_index([csv])
+    _patch_fb_collector(monkeypatch, views=None, reactions=1126, post_id="778899")
+
+    p, _ = make_pacer(budget=10)
+    assert collect_facebook(run, pacer=p) == 1
+    cell = run.rows[0].cells["fb1"]
+    assert cell.value == 161460 and cell.provenance == "collected"
+    assert "778899" in cell.note
+
+
+def test_post_id_join_is_skipped_when_the_export_lacks_the_id(monkeypatch, tmp_path):
+    from relay.collectors.runner import collect_facebook
+    from relay.ingest.insights import build_index
+
+    csv = tmp_path / "e.csv"
+    csv.write_text(
+        '"Post ID",Permalink,Title,Views,Reach,Reactions\n'
+        '111,https://www.facebook.com/somoynews.tv/posts/pfbid0X,"t",100,90,1\n',
+        encoding="utf-8-sig")
+
+    run = _one_row_run("https://www.facebook.com/somoynews.tv/posts/pfbid0Y")
+    run.insights = build_index([csv])
+    _patch_fb_collector(monkeypatch, views=None, reactions=40, post_id="999")
+
+    p, _ = make_pacer(budget=10)
+    assert collect_facebook(run, pacer=p) == 1
+    assert run.rows[0].cells["fb1"].provenance == "estimated"

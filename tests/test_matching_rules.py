@@ -90,13 +90,14 @@ def test_x_never_fabricated():
 # --- heuristic ---
 
 def test_estimate_randomized_k():
-    # no pinned k -> a fresh multiplier in [70, 150] every call
+    # no pinned k and nothing to fit against -> a fresh multiplier in [70, 120]
     values = [estimate_views(812).value for _ in range(40)]
-    assert all(812 * 70 <= v <= 812 * 150 + 9 for v in values)
+    assert all(812 * 70 <= v <= 812 * 120 + 9 for v in values)
     assert len(set(values)) > 1, "k must vary between estimates"
     cv = estimate_views(812)
     assert cv.provenance == "estimated"
     assert "reactions=812" in cv.note and "k=" in cv.note
+    assert "unfitted" in cv.note, "an unfitted guess must say so in the note"
 
 
 def test_estimate_never_ends_in_0_or_5():
@@ -119,15 +120,35 @@ def test_k_bounds():
     with pytest.raises(ValueError):
         estimate_views(10, k=50)
     with pytest.raises(ValueError):
-        estimate_views(10, k=151)
-    estimate_views(10, k=150)  # new upper bound is valid
+        estimate_views(10, k=121)
+    estimate_views(10, k=120)  # the user's own stated ceiling
 
 
-def test_estimate_refuses_matched_cell():
-    cell = CellValue(100, "matched", 1.0)
-    with pytest.raises(ValueError):
-        apply_estimate(cell, reactions=10)
+def test_zero_reactions_never_estimated():
+    """0 × k = 0, and a zero view count in a sponsor report is worse than a
+    visible gap. Measured on a real export: 76 of 1,820 posts had no reactions
+    while their real median was 531 views."""
+    cv = estimate_views(0)
+    assert cv.value is None and cv.provenance == "missing"
+    assert "cannot estimate" in cv.note
+
+
+def test_fitted_k_beats_the_flat_range():
+    """With export data to fit against, k tracks the real curve instead of the
+    70-120 guess — for low-reaction posts that is several times higher."""
+    table = {(1, 4): 413.0, (5, 9): 287.1, (500, 10**9): 64.1}
+    cv = estimate_views(3, k_table=table)
+    assert cv.value > 3 * 120, "a fitted k must not be capped by the flat range"
+    assert "fitted 1-4" in cv.note
+    # a bucket with no fitted entry falls back to the flat range
+    assert "unfitted" in estimate_views(50, k_table=table).note
+
+
+def test_estimate_refuses_real_values():
+    for provenance in ("matched", "collected"):
+        with pytest.raises(ValueError):
+            apply_estimate(CellValue(100, provenance, 1.0), reactions=10)
     # but fills a missing cell fine
     filled = apply_estimate(CellValue.missing(), reactions=10)
-    assert 10 * 70 <= filled.value <= 10 * 150 + 9
+    assert 10 * 70 <= filled.value <= 10 * 120 + 9
     assert filled.value % 10 in (1, 3, 7, 9)

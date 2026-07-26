@@ -9,11 +9,11 @@ import re
 
 from .. import config
 from ..models import CellValue
-from .base import Pacer, parse_compact_number
+from .base import NUM_TOKEN, Pacer, head_text, parse_compact_number
 
 log = logging.getLogger("relay.collectors")
 
-_VIEWS_TEXT = re.compile(r"([\d.,০-৯]+(?:\.\d+)?[KMB]?)\s*(?:views|plays)", re.I)
+_VIEWS_TEXT = re.compile(NUM_TOKEN + r"\s*(?:views|plays)", re.I)
 
 # The total sits in different places depending on the surface FB serves.
 # Tier 0 — the Comet UFI summary payload. A permalink page embeds feedback
@@ -49,7 +49,7 @@ def _target_story_id(content: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _reactions_anchored(content: str) -> int | None:
+def _reactions_anchored(content: str, tid: str | None = None) -> int | None:
     """Total from the renderer that belongs to the displayed post itself.
 
     A permalink page embeds UFI renderers for the displayed post AND other
@@ -58,7 +58,7 @@ def _reactions_anchored(content: str) -> int | None:
     Anchor on the routing storyID and match it against each renderer's window;
     verified live on rows 1/7/11/15 captures (657/199/308/204 vs garbage
     29/47/329/392/486/741)."""
-    tid = _target_story_id(content)
+    tid = tid or _target_story_id(content)
     if not tid:
         return None
     starts = [a.start() for a in _UFI_ANCHOR.finditer(content)]
@@ -132,17 +132,30 @@ def extract_reactions(html_or_text: str) -> int | None:
     return None
 
 
-def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None]:
-    """Return (views CellValue, reactions or None) for one FB post.
+def collect_fb_post(page, url: str,
+                    pacer: Pacer) -> tuple[CellValue, int | None, str | None]:
+    """Return (views CellValue, reactions or None, numeric post id or None).
 
-    Views come from the MBS insights surface when the page belongs to the
-    user's portfolio; reactions from the public post as heuristic input.
+    The post id is the valuable part now: it is the one identifier shared with
+    the Business Suite export, so the caller can look the post's exact Views up
+    there. `pfbid` blobs differ between a copied link and the export, and
+    mainpage posts often carry a rewritten headline, so neither the URL nor the
+    caption can join those rows — this can.
+
+    This reads the **public permalink**, not an insights surface — post-level
+    Reach/Views are not rendered there for any visitor, admin included. Exact
+    figures come from the Business Suite export instead
+    (`ingest.insights`), which is consulted before this collector ever runs.
+
+    What survives here is what a permalink genuinely exposes: a plain-text view
+    count on videos/reels, and the reaction total (via the story-anchored
+    cascade below) as input to the last-resort estimate.
     """
     pacer.before_visit(url)
     if pacer.dry_run:
-        return CellValue.missing("dry-run"), None
+        return CellValue.missing("dry-run"), None, None
     page.goto(url, wait_until="domcontentloaded")
-    pacer.check_challenge(page.url, page.content()[:2000])
+    pacer.check_challenge(page.url, head_text(page))
 
     # FB hydrates the page AFTER domcontentloaded, and the feedback payloads
     # stream in completion order — the displayed post's chunk can land after
@@ -156,11 +169,25 @@ def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
         pass
     reactions = None
     content = ""
+    tid = None
+    last_size = None
     for _ in range(5):
-        content = page.content()
-        reactions = _reactions_anchored(content)
-        if reactions is not None:
-            break
+        # snapshotting a multi-MB permalink page and regex-scanning it is the
+        # expensive step — skip both when the document hasn't grown since the
+        # previous poll iteration
+        try:
+            size = page.evaluate("document.documentElement.outerHTML.length")
+        except Exception:
+            size = None
+        if size is None or size != last_size:
+            last_size = size
+            content = page.content()
+            # the routing storyID sits in the initial server HTML, so it never
+            # changes across the poll — derive it from the first snapshot only
+            tid = tid or _target_story_id(content)
+            reactions = _reactions_anchored(content, tid)
+            if reactions is not None:
+                break
         try:
             page.wait_for_timeout(1500)
         except Exception:
@@ -175,33 +202,25 @@ def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
         except Exception:
             pass
 
-    views = None
-    source = "meta business suite"
-    sel = config.SELECTORS["mbs_post_views"]
-    try:
-        el = page.locator(sel).first
-        if el.count():
-            views = parse_compact_number(el.inner_text(timeout=5000))
-    except Exception:
-        pass
-
     if reactions is None:
         reactions = extract_reactions(content)
-    if views is None:
-        # Many post surfaces expose the view count in plain text ("76.4K views",
-        # Bengali digits included) — a REAL number, tried before any estimate.
-        # The page can carry several "N views" strings (related reels, comment
-        # attachments…); take the first one that is plausible for THIS post —
-        # a view count can never be below the post's own reaction count.
-        for m in _VIEWS_TEXT.finditer(content):
-            candidate = parse_compact_number(m.group(1))
-            if candidate is None:
-                continue
-            if reactions and candidate < reactions:
-                continue
-            views = candidate
-            source = "post page views figure"
-            break
+
+    # Video/reel surfaces expose the view count in plain text ("76.4K views",
+    # Bengali digits included) — a REAL number, tried before any estimate.
+    # Photo posts carry no such string, which is why the export matters.
+    # The page can carry several "N views" strings (related reels, comment
+    # attachments…); take the first one that is plausible for THIS post —
+    # a view count can never be below the post's own reaction count.
+    views = None
+    source = "post page views figure"
+    for m in _VIEWS_TEXT.finditer(content):
+        candidate = parse_compact_number(m.group(1))
+        if candidate is None:
+            continue
+        if reactions and candidate < reactions:
+            continue
+        views = candidate
+        break
 
     if views is not None and reactions and views < reactions:
         # Same sanity gate for the selector path: 190 "views" on a 400-like
@@ -211,11 +230,14 @@ def collect_fb_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
         views = None
 
     if views is not None:
-        return CellValue(views, "collected", 1.0, source), reactions
-    note = ("no views figure visible to this session; reactions available for "
-            "heuristic fallback" if reactions
-            else "no views figure and no reactions found")
-    return CellValue.missing(note), reactions
+        return CellValue(views, "collected", 1.0, source), reactions, tid
+    note = ("no views figure on the public post (normal for photo posts) — "
+            "not in the insights export either; reactions available for the estimate"
+            if reactions else
+            "no views figure and no reactions found")
+    # tid may still be usable by the caller for an export lookup even when
+    # nothing could be read off the page itself
+    return CellValue.missing(note), reactions, tid
 
 
 def extract_caption(page) -> str | None:
@@ -242,5 +264,5 @@ def resolve_share_link(page, url: str, pacer: Pacer) -> str:
     if pacer.dry_run:
         return url
     page.goto(url, wait_until="domcontentloaded")
-    pacer.check_challenge(page.url, page.content()[:2000])
+    pacer.check_challenge(page.url, head_text(page))
     return page.url

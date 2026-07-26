@@ -10,12 +10,20 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 
 from .. import config
 
 log = logging.getLogger("relay.collectors")
+
+# A display figure that cannot fuse with an adjacent number. The naive
+# [\d.,]+ class once swallowed "…Jul 24, 2026,290 Views" as one token and
+# reported 2026290 views — the year glued to the real count. Strict thousand
+# grouping plus a left boundary makes that impossible; Bengali digits OK.
+NUM_TOKEN = (r"(?<![\d.,০-৯])"
+             r"((?:\d{1,3}(?:,\d{3})*|[০-৯]{1,3}(?:,[০-৯]{3})*)(?:\.\d+)?[KMB]?)")
 
 
 class BudgetExceeded(RuntimeError):
@@ -64,6 +72,18 @@ class Pacer:
                 )
 
 
+def head_text(page, n: int = 2000) -> str:
+    """First n chars of the page HTML — page.content() on an MBS permalink is
+    multi-MB, far too heavy to materialize for a challenge-marker check."""
+    try:
+        return page.evaluate(f"document.documentElement.outerHTML.slice(0, {n})")
+    except Exception:
+        try:
+            return page.content()[:n]
+        except Exception:
+            return ""
+
+
 def parse_compact_number(text: str, rng: random.Random | None = None) -> int | None:
     """'812' -> 812 exactly; suffixed figures get their hidden digits back:
     '76.4K' -> 764xx, '1.7K' -> 17xx (e.g. 1783), '1.2M' -> 12xxxxx.
@@ -77,8 +97,14 @@ def parse_compact_number(text: str, rng: random.Random | None = None) -> int | N
     if not text:
         return None
     bn = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
-    s = (text.strip().translate(bn).replace(",", "")
+    s = (text.strip().translate(bn)
          .replace("\u00a0", " ").replace("\u202f", " ").strip())
+    if "," in s:
+        # Malformed grouping ("2026,290") means two adjacent figures fused
+        # (a date's year and the real count) \u2014 never a real display number.
+        if not re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?[KMBkmb]?", s):
+            return None
+        s = s.replace(",", "")
     mult = 1.0
     for suffix, m in (("k", 1e3), ("m", 1e6), ("b", 1e9)):
         if s.lower().endswith(suffix):

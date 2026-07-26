@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config
-from .models import RunResult
+from .models import CellValue, RunResult
 
 # row_no is intentionally NOT unique: campaign sheets are hand-filled, so No
 # can repeat or be blank. Row identity for the audit log is positional, not the
 # human No — the report generator is what guarantees a unique No in the output.
+# row_idx is that positional identity (enumerate order), the key the collector
+# checkpoints and the resume path use.
 _CELLS_COLUMNS = "run_id, row_no, slot, link, value, provenance, confidence, note"
 _CELLS_DDL = """
 CREATE TABLE IF NOT EXISTS cells (
@@ -22,7 +25,8 @@ CREATE TABLE IF NOT EXISTS cells (
     value INTEGER,
     provenance TEXT NOT NULL,
     confidence REAL NOT NULL,
-    note TEXT
+    note TEXT,
+    row_idx INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_cells_key ON cells (run_id, row_no, slot);
 """
@@ -54,12 +58,19 @@ def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     path = Path(db_path or config.DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
+    # WAL keeps the per-target checkpoint writes from blocking dashboard reads
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
     try:  # migrate databases created before the summary column existed
         conn.execute("ALTER TABLE runs ADD COLUMN summary TEXT")
     except sqlite3.OperationalError:
         pass
+    try:  # migrate databases created before the row_idx column existed
+        conn.execute("ALTER TABLE cells ADD COLUMN row_idx INTEGER")
+    except sqlite3.OperationalError:
+        pass
     _migrate_cells(conn)
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_cells_pos ON cells (run_id, row_idx, slot)")
     return conn
 
 
@@ -101,27 +112,114 @@ def save_run(result: RunResult, inputs: dict, db_path: str | Path | None = None)
         )
         run_id = cur.lastrowid
         conn.executemany(
-            "INSERT INTO cells VALUES (?,?,?,?,?,?,?,?)",
+            f"INSERT INTO cells ({_CELLS_COLUMNS}, row_idx) VALUES (?,?,?,?,?,?,?,?,?)",
             [
                 (run_id, r.no, slot, r.links.get(slot), c.value, c.provenance,
-                 c.confidence, c.note)
-                for r in result.rows for slot, c in r.cells.items()
+                 c.confidence, c.note, idx)
+                for idx, r in enumerate(result.rows) for slot, c in r.cells.items()
             ],
         )
         return run_id
 
 
+def update_cell(run_id: int, row_idx: int, slot: str, cell: CellValue,
+                db_path: str | Path | None = None) -> None:
+    """Checkpoint one collected cell so a crash mid-collection loses nothing."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE cells SET value=?, provenance=?, confidence=?, note=? "
+            "WHERE run_id=? AND row_idx=? AND slot=?",
+            (cell.value, cell.provenance, cell.confidence, cell.note,
+             run_id, row_idx, slot),
+        )
+
+
+def load_cells(run_id: int, db_path: str | Path | None = None) -> list[dict]:
+    """Cells worth restoring into a fresh run of the same inputs — anything a
+    collector or the user filled in, keyed by position."""
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT row_idx, slot, link, value, provenance, confidence, note "
+            "FROM cells WHERE run_id=? AND row_idx IS NOT NULL "
+            "AND value IS NOT NULL "
+            "AND provenance IN ('collected','estimated','manual')",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def hydrate_cells(result: RunResult, cells: list[dict]) -> int:
+    """Restore previously collected values into a freshly matched RunResult.
+    Only cells whose position AND link still agree are restored — an edited
+    sheet shifts rows, and a mismatched link means 're-collect'. Cells the
+    matcher already filled are left alone. Returns the number restored."""
+    restored = 0
+    for c in cells:
+        idx = c["row_idx"]
+        if idx is None or idx >= len(result.rows):
+            continue
+        row = result.rows[idx]
+        slot = c["slot"]
+        if slot not in row.cells or row.links.get(slot) != c["link"]:
+            continue
+        if row.cells[slot].value is not None:
+            continue
+        row.cells[slot] = CellValue(c["value"], c["provenance"],
+                                    c["confidence"], c["note"])
+        restored += 1
+    return restored
+
+
+def _run_key(inputs: dict) -> tuple:
+    """Identity of a run for resume purposes. Uploads are stored under a random
+    per-upload prefix ('a1b2c3d4_Cocola.xlsx'), so a re-uploaded sheet gets a
+    new path — compare the original filename instead."""
+    name = Path(inputs.get("campaign") or "").name
+    m = re.match(r"^[0-9a-f]{8}_(.+)$", name)
+    if m:
+        name = m.group(1)
+    return (name, inputs.get("sheet"), inputs.get("brand"))
+
+
+def find_resumable_run(inputs: dict, db_path: str | Path | None = None) -> int | None:
+    """Most recent run created from the same campaign file/sheet/brand — the
+    previous attempt whose collected values a new run can inherit."""
+    key = _run_key(inputs)
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT id, inputs FROM runs ORDER BY id DESC").fetchall()
+    for rid, blob in rows:
+        try:
+            prev = json.loads(blob)
+        except ValueError:
+            continue
+        if _run_key(prev) == key:
+            return rid
+    return None
+
+
 def record_override(run_id: int, row_no: int, slot: str, old, new,
-                    db_path: str | Path | None = None) -> None:
+                    db_path: str | Path | None = None,
+                    cell: CellValue | None = None) -> None:
+    """Log a dashboard edit and write the new value through.
+
+    `cell` carries the value's real provenance. Without it this defaulted to
+    'manual'/1.0, which silently relabelled dashboard *estimates* as
+    hand-entered values — they then came back from a resume without their ≈
+    marking and with false confidence.
+    """
+    provenance = cell.provenance if cell is not None else "manual"
+    confidence = cell.confidence if cell is not None else 1.0
+    note = cell.note if cell is not None else "manual entry"
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO overrides VALUES (?,?,?,?,?,?)",
             (run_id, row_no, slot, old, new, datetime.now(timezone.utc).isoformat()),
         )
         conn.execute(
-            "UPDATE cells SET value=?, provenance='manual', confidence=1.0 "
+            "UPDATE cells SET value=?, provenance=?, confidence=?, note=? "
             "WHERE run_id=? AND row_no=? AND slot=?",
-            (new, run_id, row_no, slot),
+            (new, provenance, confidence, note, run_id, row_no, slot),
         )
 
 

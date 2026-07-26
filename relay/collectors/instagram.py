@@ -13,7 +13,7 @@ import logging
 import re
 
 from ..models import CellValue
-from .base import Pacer, parse_compact_number
+from .base import NUM_TOKEN, Pacer, head_text, parse_compact_number
 
 log = logging.getLogger("relay.collectors")
 
@@ -23,8 +23,8 @@ _JSON_VIEWS = re.compile(
 _JSON_LIKES = re.compile(
     r'"(?:edge_media_preview_like|edge_liked_by)"\s*:\s*\{\s*"count"\s*:\s*(\d+)')
 # visible text fallbacks ("12.5K views", "1,234 likes", Bengali digits OK)
-_VIEWS_TEXT = re.compile(r"([\d.,০-৯]+(?:\.\d+)?[KMB]?)\s*(?:views|plays)", re.I)
-_LIKES_TEXT = re.compile(r"([\d.,০-৯]+(?:\.\d+)?[KMB]?)\s*likes", re.I)
+_VIEWS_TEXT = re.compile(NUM_TOKEN + r"\s*(?:views|plays)", re.I)
+_LIKES_TEXT = re.compile(NUM_TOKEN + r"\s*likes", re.I)
 
 
 def extract_ig_views(content: str, likes: int | None = None) -> int | None:
@@ -55,7 +55,7 @@ def collect_ig_post(page, url: str, pacer: Pacer) -> tuple[CellValue, int | None
     if pacer.dry_run:
         return CellValue.missing("dry-run"), None
     page.goto(url, wait_until="domcontentloaded")
-    pacer.check_challenge(page.url, page.content()[:2000])
+    pacer.check_challenge(page.url, head_text(page))
 
     if "accounts/login" in page.url:
         return CellValue.missing(
