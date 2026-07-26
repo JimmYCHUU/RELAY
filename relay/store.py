@@ -173,7 +173,7 @@ def hydrate_cells(result: RunResult, cells: list[dict]) -> int:
 
 def _run_key(inputs: dict) -> tuple:
     """Identity of a run for resume purposes. Uploads are stored under a random
-    per-upload prefix ('a1b2c3d4_Cocola.xlsx'), so a re-uploaded sheet gets a
+    per-upload prefix ('a1b2c3d4_campaign.xlsx'), so a re-uploaded sheet gets a
     new path — compare the original filename instead."""
     name = Path(inputs.get("campaign") or "").name
     m = re.match(r"^[0-9a-f]{8}_(.+)$", name)

@@ -1,7 +1,7 @@
 """Sponsor report writer — "modern theme" (SRS FR-20..FR-22, SDD 5.6).
 
 Layout (columns, footer formulas, merges) still mirrors the hand-made
-`White Plus FB Photocard (April).xlsx` ground truth; the visual layer is the
+the client's own hand-made report as ground truth; the visual layer is the
 modern style the analyst approved from `style-samples/style-3-modern-theme.xlsx`.
 The accent color follows the brand: it is detected from the campaign sheet's
 fills, with the theme's teal as the fallback for colorless sheets.
@@ -70,7 +70,7 @@ def detect_brand_accent(campaign_path: str | Path, max_rows: int = 200) -> str |
     """Dominant saturated fill color across the campaign workbook's sheets —
     brand sheets usually carry the brand's tone. Grays/whites and the standard
     link-blue / warning-red fonts' hexes are ignored; None when nothing
-    qualifies (e.g. White Plus sheets, which are pure gray)."""
+    qualifies (e.g. sheets that are pure gray)."""
     try:
         wb = openpyxl.load_workbook(campaign_path, read_only=False)
     except Exception:

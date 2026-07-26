@@ -5,6 +5,8 @@
 .~lock.*
 data/
 System Design Request.md
+# the sample filenames name the sponsor, so they stay local too
+tests/samples_local.py
 
 # python
 __pycache__/

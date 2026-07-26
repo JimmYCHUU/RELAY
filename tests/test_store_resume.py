@@ -14,12 +14,12 @@ def make_result(n=3):
         cells = {s: CellValue.missing("not matched") for s in SLOTS}
         rows.append(ReportRow(no=i + 1, date=None, caption=f"post {i}",
                               links=links, cells=cells))
-    return RunResult(brand="Cocola", month="April", rows=rows)
+    return RunResult(brand="Brand C", month="April", rows=rows)
 
 
 def test_update_cell_and_load_cells_roundtrip(tmp_path):
     db = tmp_path / "runs.db"
-    inputs = {"campaign": "ab12cd34_Cocola.xlsx", "sheet": "April", "brand": "Cocola"}
+    inputs = {"campaign": "ab12cd34_Brand C.xlsx", "sheet": "April", "brand": "Brand C"}
     run_id = store.save_run(make_result(), inputs, db_path=db)
     store.update_cell(run_id, 0, "fb1", CellValue(123, "collected", 1.0, "mbs"), db_path=db)
     store.update_cell(run_id, 2, "x", CellValue(456, "estimated", 0.6, "k=95"), db_path=db)
@@ -31,15 +31,15 @@ def test_find_resumable_run_matches_reuploaded_file(tmp_path):
     """Uploads get a fresh random prefix each session — the same sheet
     re-uploaded after a PC restart must still find its previous run."""
     db = tmp_path / "runs.db"
-    store.save_run(make_result(), {"campaign": "11111111_Cocola.xlsx",
-                                   "sheet": "April", "brand": "Cocola"}, db_path=db)
-    b = store.save_run(make_result(), {"campaign": "22222222_Cocola.xlsx",
-                                       "sheet": "April", "brand": "Cocola"}, db_path=db)
+    store.save_run(make_result(), {"campaign": "11111111_Brand C.xlsx",
+                                   "sheet": "April", "brand": "Brand C"}, db_path=db)
+    b = store.save_run(make_result(), {"campaign": "22222222_Brand C.xlsx",
+                                       "sheet": "April", "brand": "Brand C"}, db_path=db)
     store.save_run(make_result(), {"campaign": "33333333_White.xlsx",
-                                   "sheet": "April", "brand": "White Plus"}, db_path=db)
+                                   "sheet": "April", "brand": "Brand A"}, db_path=db)
     assert store.find_resumable_run(
-        {"campaign": "/data/uploads/99999999_Cocola.xlsx",
-         "sheet": "April", "brand": "Cocola"}, db_path=db) == b
+        {"campaign": "/data/uploads/99999999_Brand C.xlsx",
+         "sheet": "April", "brand": "Brand C"}, db_path=db) == b
     assert store.find_resumable_run(
         {"campaign": "deadbeef_Other.xlsx", "sheet": "April", "brand": "Nope"},
         db_path=db) is None
@@ -48,7 +48,7 @@ def test_find_resumable_run_matches_reuploaded_file(tmp_path):
 def test_hydrate_cells_restores_and_guards(tmp_path):
     db = tmp_path / "runs.db"
     run_id = store.save_run(make_result(), {"campaign": "c.xlsx", "sheet": "April",
-                                            "brand": "Cocola"}, db_path=db)
+                                            "brand": "Brand C"}, db_path=db)
     store.update_cell(run_id, 0, "fb1", CellValue(123, "collected", 1.0, "mbs"), db_path=db)
     store.update_cell(run_id, 1, "x", CellValue(456, "collected", 1.0, "x"), db_path=db)
     fresh = make_result()
@@ -72,14 +72,14 @@ CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NUL
 CREATE TABLE cells (run_id INTEGER NOT NULL, row_no INTEGER, slot TEXT NOT NULL,
     link TEXT, value INTEGER, provenance TEXT NOT NULL, confidence REAL NOT NULL,
     note TEXT);
-INSERT INTO runs (created_at, brand, month, inputs) VALUES ('t','Cocola','April','{}');
+INSERT INTO runs (created_at, brand, month, inputs) VALUES ('t','Brand C','April','{}');
 INSERT INTO cells VALUES (1, 1, 'fb1', 'https://f', 5, 'collected', 1.0, '');
 """)
     conn.commit()
     conn.close()
     assert store.load_cells(1, db_path=db) == []  # legacy rows: row_idx IS NULL
     run_id = store.save_run(make_result(), {"campaign": "c.xlsx", "sheet": "April",
-                                            "brand": "Cocola"}, db_path=db)
+                                            "brand": "Brand C"}, db_path=db)
     store.update_cell(run_id, 0, "x", CellValue(9, "collected", 1.0, ""), db_path=db)
     assert store.load_cells(run_id, db_path=db)[0]["value"] == 9
 
@@ -178,7 +178,7 @@ def test_override_preserves_a_dashboard_estimate_s_provenance(tmp_path):
     so a dashboard *estimate* came back from a resume looking hand-entered —
     losing its ≈ marking and claiming full confidence it never had."""
     db = tmp_path / "runs.db"
-    inputs = {"campaign": "c.xlsx", "sheet": "April", "brand": "Cocola"}
+    inputs = {"campaign": "c.xlsx", "sheet": "April", "brand": "Brand C"}
     run_id = store.save_run(make_result(), inputs, db_path=db)
 
     est = CellValue(77137, "estimated", 0.5, "reactions=812, k=95 (pinned)")
@@ -193,7 +193,7 @@ def test_override_preserves_a_dashboard_estimate_s_provenance(tmp_path):
 
 def test_override_without_a_cell_still_records_a_manual_entry(tmp_path):
     db = tmp_path / "runs.db"
-    inputs = {"campaign": "c.xlsx", "sheet": "April", "brand": "Cocola"}
+    inputs = {"campaign": "c.xlsx", "sheet": "April", "brand": "Brand C"}
     run_id = store.save_run(make_result(), inputs, db_path=db)
     store.record_override(run_id, 1, "fb1", None, 500, db_path=db)
     with sqlite3.connect(db) as conn:

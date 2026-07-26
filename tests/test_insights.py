@@ -327,8 +327,8 @@ def _two_slot_run(v2, v3):
 
 
 def test_swapped_slots_are_corrected(tmp_path):
-    """Measured on April 2026: 36% of filled FB cells carried a different
-    page's number because Views_Match_1 is not always Somoy Shongbad."""
+    """Measured on a real month: a sizeable share of filled FB cells carried a
+    different page's number, because Views_Match_1 is not always the subpage."""
     from relay.resolve.insights_fill import reassign_subpage_slots
     index = build_index([_csv(tmp_path, TWO_PAGES)])
 

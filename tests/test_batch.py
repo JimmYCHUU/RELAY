@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
 @pytest.fixture()
 def two_runs(client):
     ids = []
-    for brand in ("White Plus", "Fresh Gel"):
+    for brand in ("Brand A", "Brand B"):
         res = client.post("/api/run", json={
             "campaign": str(CAMPAIGN), "sheet": "April", "brand": brand,
             "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA),
@@ -86,7 +86,7 @@ def test_autopilot_dry_run_completes_campaigns_in_load_order(client, two_runs):
     assert "autopilot done" in s["message"]
     # campaign-major order: all of brand 1's platform passes before brand 2's
     brands = [e.split(" · ")[0] for e in s["events"]]
-    assert brands == ["White Plus"] * 3 + ["Fresh Gel"] * 3
+    assert brands == ["Brand A"] * 3 + ["Brand B"] * 3
 
 
 def test_autopilot_checks_meta_session_upfront(client, two_runs, tmp_path, monkeypatch):

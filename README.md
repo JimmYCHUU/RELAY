@@ -235,8 +235,8 @@ curl http://localhost:8501/api/runs   # dashboard alive → JSON run history
 
 1. Download the brand's campaign Google Sheet as `.xlsx`.
 2. Get the three matched files from your supervisor (mainpage / subpage / insta) —
-   optional, but they auto-resolve most cells. Multi-brand files with `Bkash`-style
-   separator rows work as-is; RELAY finds the right section.
+   optional, but they auto-resolve most cells. Multi-brand files that separate
+   sponsors with a bare brand-name row work as-is; RELAY finds the right section.
 3. Export your content data from Meta Business Suite (Insights → Content →
    export) and drop it in too — **one file covers all your pages**, so this is a
    single download per month, not one per page. It carries Meta's **exact** Views
@@ -253,17 +253,17 @@ curl http://localhost:8501/api/runs   # dashboard alive → JSON run history
 
 ```bash
 # list month tabs
-python -m relay.cli sheets "White Plus Updated FB Photocard Campaign _ Mar'26.xlsx"
+python -m relay.cli sheets "Campaign.xlsx"
 
 # full run with cross-check
 python -m relay.cli run \
-  --campaign "White Plus Updated FB Photocard Campaign _ Mar'26.xlsx" \
-  --sheet April --brand "White Plus" \
-  --mainpage "white plus mainpage matched (1).xlsx" \
-  --subpage  "white plus subpage matched (2).xlsx" \
-  --insta    "white plus insta matched (3).xlsx" \
-  --insights "WhitePlusApril.csv" \
-  --reference "White Plus FB Photocard (April).xlsx"
+  --campaign "Campaign.xlsx" \
+  --sheet April --brand "Brand A" \
+  --mainpage "mainpage matched.xlsx" \
+  --subpage  "subpage matched.xlsx" \
+  --insta    "insta matched.xlsx" \
+  --insights "insights-export.csv" \
+  --reference "FB Photocard (April).xlsx"
 ```
 
 `--insights` takes a Business Suite content export. One export normally covers
@@ -301,9 +301,10 @@ never entered or stored anywhere — X collection is public-page only.
 | X impressions | collector only — never fabricated |
 
 **The export also fixes which column a value belongs in.** Your supervisor's
-`Views_Match_N` order doesn't track Link 2 / Link 3 — on April 2026 that put
-36% of checkable cells on the wrong page's column (row totals were right, the
-columns were swapped). With an export loaded, RELAY reorders their values onto
+`Views_Match_N` order doesn't track Link 2 / Link 3 — their file lists values in
+whatever order its scraper found them, which puts a sizeable share of checkable
+cells on the wrong page's column (row totals stay right, the columns are
+swapped). With an export loaded, RELAY reorders their values onto
 the columns the export attributes them to. It never changes a number, only which
 cell it sits in, and each moved value says where it came from.
 
@@ -317,8 +318,9 @@ can trace the number back to a row in the file you hand them.
 
 The reactions × k estimate is the last resort only — for posts no export covers.
 Its multiplier is fitted from your own export data rather than guessed: measured
-across 1,820 real posts, reach/reactions ranged from ~294× at 1–4 reactions down
-to ~61× at 500+, so a single fixed multiplier matched fewer than a fifth of them.
+across a month of real posts, the views-per-reaction ratio spans an order of
+magnitude — several hundred × at a handful of reactions down to tens of × on the
+busiest posts — so a single fixed multiplier fits only a small minority of them.
 Posts with zero reactions are left blank rather than estimated as zero.
 
 Anything unresolved is *flagged*, never guessed; estimates are always labeled

@@ -1,16 +1,16 @@
 """Meta Business Suite content-export parser.
 
 The export is the only source of *exact* Facebook figures RELAY has. Verified
-against a real file (`Jul-01-2026_Jul-15-2026_…csv`, Somoy Shongbad, 1,820
-posts over 15 days): every row carried both Views and Reach, including all 14
-`Is share = 1` rows — which is why shared posts no longer need estimating.
+against a real half-month export: every row carried both Views and Reach,
+including the `Is share = 1` rows — which is why shared posts no longer need
+estimating.
 
 Two format details the sample forced:
   * the CSV is UTF-8 **with BOM**, so `utf-8-sig` is required or the first
     header becomes "﻿Post ID";
   * `Title` holds the post caption verbatim, embedded newlines and all, so the
-    file must go through the `csv` module rather than naive line splitting
-    (1,820 records span 6,648 physical lines).
+    file must go through the `csv` module rather than naive line splitting —
+    records routinely span several physical lines each.
 
 Header names are matched tolerantly because Meta renames and localizes them;
 the alias table lives in `config.INSIGHTS_HEADERS` next to `SELECTORS`, which

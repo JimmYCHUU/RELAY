@@ -2,10 +2,11 @@
 
 This runs only when neither the supervisor matched file nor Meta's own insights
 export can account for a cell. That ordering matters, because the multiplier is
-a poor estimator and now says so honestly: measured against a real export of
-1,820 posts, `views = reactions x k` with k in [70,120] was right for **8.4%**
-of posts, and the true ratio falls steeply as engagement rises — ~413x at 1-4
-reactions down to ~64x at 500+.
+a poor estimator and now says so honestly: measured against a month of real
+export data, `views = reactions x k` with k in [70,120] landed close for well
+under a tenth of posts, and the true ratio falls steeply as engagement rises —
+several hundred x on posts with a handful of reactions, tens of x on the
+busiest ones.
 
 So when the export is available, k is *fitted from the user's own data* per
 reaction bucket (`insights_fill.fit_k_table`) instead of guessed. The flat
@@ -56,8 +57,8 @@ def estimate_views(
 
     Returns a `missing` cell for zero reactions: the multiplier has nothing to
     work with, and writing 0 into a sponsor report would be worse than leaving
-    the gap visible. On the sample export, 76 of 1,820 posts had no reactions
-    at all while their real median was 531 views.
+    the gap visible. Posts with no reactions at all are a small but real slice
+    of any month, and they still collect hundreds of views.
     """
     if reactions < 0:
         raise ValueError("reactions must be >= 0")

@@ -8,19 +8,45 @@ sys.path.insert(0, str(ROOT))
 
 SAMPLES = ROOT
 
-CAMPAIGN = SAMPLES / "White Plus Updated FB Photocard Campaign _ Mar'26.xlsx"
-REPORT_APRIL = SAMPLES / "White Plus FB Photocard (April).xlsx"
-WP_MAIN = SAMPLES / "white plus mainpage matched (1).xlsx"
-WP_SUB = SAMPLES / "white plus subpage matched (2).xlsx"
-WP_INSTA = SAMPLES / "white plus insta matched (3).xlsx"
-ALL_MAIN_APRIL = SAMPLES / "April social card mainpage matched.xlsx"
-ALL_MAIN_PENDING = SAMPLES / "Pendding social card mainpage matched.xlsx"
-ALL_SUB_PENDING = SAMPLES / "pending social card subpage matched (1).xlsx"
-# A real Business Suite content export (Somoy Shongbad, 1-15 Jul 2026). Like the
-# workbooks above it holds live data and is git-ignored, so tests that use it
-# skip when it is absent — the synthetic fixtures in test_insights.py cover the
-# same behaviour without it.
-INSIGHTS_EXPORT = SAMPLES / "Jul-01-2026_Jul-15-2026_1405585348144457.csv"
+# The sample workbooks are the client's own files: sponsor campaign sheets, the
+# supervisor's matched files and a real Business Suite export. They are
+# git-ignored, and so are their *names* — a filename like
+# "<sponsor> FB Photocard (April).xlsx" identifies the sponsor on its own.
+#
+# So the names live in `tests/samples_local.py`, which is git-ignored too. Copy
+# `tests/samples_local.example.py` to `tests/samples_local.py` and fill in your
+# own filenames to run the file-bound tests. Without it every path below points
+# at something that does not exist, and those tests skip themselves — which is
+# exactly what CI does.
+try:
+    from tests import samples_local as _local
+except ImportError:                     # no local samples configured
+    _local = None
+
+
+def _sample(attr: str) -> Path:
+    """A sample path from the local config, or a name that cannot exist."""
+    return SAMPLES / getattr(_local, attr, f"__no_local_sample__{attr}")
+
+
+def local_value(attr: str, default=None):
+    """A workbook-specific expected value (a sheet tab name, a brand section
+    key) that only makes sense against the local files."""
+    return getattr(_local, attr, default)
+
+
+CAMPAIGN = _sample("CAMPAIGN")
+REPORT_APRIL = _sample("REPORT_APRIL")
+WP_MAIN = _sample("MAINPAGE_MATCHED")
+WP_SUB = _sample("SUBPAGE_MATCHED")
+WP_INSTA = _sample("INSTA_MATCHED")
+ALL_MAIN_APRIL = _sample("ALL_MAIN_APRIL")
+ALL_MAIN_PENDING = _sample("ALL_MAIN_PENDING")
+ALL_SUB_PENDING = _sample("ALL_SUB_PENDING")
+# A real Business Suite content export. Like the workbooks above it holds live
+# data, so tests that use it skip when it is absent — the synthetic fixtures in
+# test_insights.py cover the same behaviour without it.
+INSIGHTS_EXPORT = _sample("INSIGHTS_EXPORT")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -53,6 +79,6 @@ def april_campaign():
 def april_result():
     from relay.pipeline import run_pipeline
     return run_pipeline(
-        CAMPAIGN, "April", "White Plus",
+        CAMPAIGN, "April", "Brand A",
         mainpage_path=WP_MAIN, subpage_path=WP_SUB, insta_path=WP_INSTA,
     )

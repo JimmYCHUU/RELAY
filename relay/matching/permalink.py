@@ -1,11 +1,11 @@
 """Facebook permalink parsing — page slug, post token, canonical URL.
 
-**`pfbid` tokens are not stable identifiers.** Measured on April 2026: the
+**`pfbid` tokens are not stable identifiers.** Measured on a real month: the
 campaign sheet's copied links and Meta's own export use *different* `pfbid`
-blobs for the same post — 58 campaign links against 5,551 export rows on the
-same pages and dates gave a token intersection of exactly **zero**, while the
-captions matched at 1.00. Facebook mints `pfbid` per viewing context, so it
-cannot be used to join the two sources.
+blobs for the same post — a whole month of campaign links against the export
+rows for the same pages and dates gave a token intersection of exactly **zero**,
+while the captions matched perfectly. Facebook mints `pfbid` per viewing
+context, so it cannot be used to join the two sources.
 
 What is still reliable here:
 
@@ -16,14 +16,14 @@ What is still reliable here:
     *do* carry a durable id (`/videos/<id>`, `/<page>/<numeric-id>`,
     `permalink.php?story_fbid=`), and for resume/link-identity checks.
 
-The numeric `Post ID` export column is no help either: only 36 of 1,820
-permalinks contained it.
+The numeric `Post ID` export column is no help either: only a low single-digit
+percentage of permalinks contain it.
 
-Observed permalink shapes (real export, 1,820 posts):
+Observed permalink shapes, in descending frequency on a real export:
 
-    1,725  facebook.com/<page>/posts/<pfbid…>
-       59  facebook.com/<page>/<numeric-id>/
-       36  facebook.com/<page>/videos/<numeric-id>/
+    facebook.com/<page>/posts/<pfbid…>          the overwhelming majority
+    facebook.com/<page>/<numeric-id>/           a small remainder
+    facebook.com/<page>/videos/<numeric-id>/    videos only
 """
 from __future__ import annotations
 

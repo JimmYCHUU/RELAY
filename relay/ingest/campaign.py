@@ -1,6 +1,6 @@
 """Campaign workbook parser (SRS FR-1).
 
-Layout (verified on White Plus Feb/Mar/Apr/May/FifaWC/Election tabs):
+Layout (verified across one sponsor's Feb/Mar/Apr/May/FifaWC/Election tabs):
 row 1: free-form note cells; row 2: header
 `No | Date | Content's name | Content's Link [1] | Content's Link 2 |
  Content's Link 3 | X, Link 4 | Instagram`; data until trailing empty region.
@@ -80,7 +80,7 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
             empty_run = 0
 
             # Some sheets keep an internal category-count row right under the
-            # header ("Jusika | 35 | Marshmallow | 35 | …"): text/numbers parked
+            # header ("Category A | 35 | Category B | 35 | …"): text/numbers parked
             # in the link columns, no No, no Date, no URL anywhere. Company-side
             # bookkeeping, not campaign data — drop it from the run.
             link_junk = any(_cell_str(row[i].value) for i in (3, 4, 5, 6, 7))

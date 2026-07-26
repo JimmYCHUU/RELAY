@@ -19,7 +19,7 @@ def client(tmp_path, monkeypatch):
 @pytest.fixture()
 def run_id(client):
     res = client.post("/api/run", json={
-        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus",
+        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A",
         "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA),
     })
     assert res.status_code == 200, res.text
@@ -80,7 +80,7 @@ def test_generate_and_download(client, run_id, tmp_path):
     out = tmp_path / "dl.xlsx"
     out.write_bytes(dl.content)
     wb = openpyxl.load_workbook(out)
-    assert wb["April"]["A1"].value.startswith("WHITE PLUS")
+    assert wb["April"]["A1"].value.startswith("BRAND A")
     wb.close()
 
 
@@ -130,7 +130,7 @@ def _april_export(tmp_path):
 def test_run_with_insights_export_fills_cells_exactly(client, tmp_path):
     export, n = _april_export(tmp_path)
 
-    base = {"campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus",
+    base = {"campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A",
             "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA)}
     before = client.post("/api/run", json=base).json()
     after = client.post("/api/run", json={**base, "insights": [str(export)]}).json()
@@ -149,7 +149,7 @@ def test_run_with_insights_export_fills_cells_exactly(client, tmp_path):
 
 def test_run_without_insights_reports_none(client):
     res = client.post("/api/run", json={
-        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus"}).json()
+        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A"}).json()
     assert res["insights"] is None
 
 
@@ -157,7 +157,7 @@ def test_unreadable_insights_export_does_not_fail_the_run(client, tmp_path):
     bad = tmp_path / "bad.csv"
     bad.write_text("nothing,useful\n1,2\n", encoding="utf-8")
     res = client.post("/api/run", json={
-        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus",
+        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A",
         "insights": [str(bad)]})
     assert res.status_code == 200
     assert any("unreadable" in i["reason"] for i in res.json()["issues"])

@@ -1,4 +1,4 @@
-"""Acceptance gate (SRS AC-1): reproduce the real April White Plus report.
+"""Acceptance gate (SRS AC-1): reproduce the real April Brand A report.
 
 Ground-truth caveats, established with the analyst:
 - X column excluded — reference values are fabricated.

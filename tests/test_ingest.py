@@ -2,7 +2,8 @@ import pytest
 
 from relay.ingest.campaign import list_sheets, parse_campaign
 from relay.ingest.supervisor import parse_matched
-from tests.conftest import ALL_MAIN_APRIL, ALL_MAIN_PENDING, ALL_SUB_PENDING, CAMPAIGN, WP_INSTA, WP_MAIN, WP_SUB
+from tests.conftest import (ALL_MAIN_APRIL, ALL_MAIN_PENDING, ALL_SUB_PENDING, CAMPAIGN,
+                            WP_INSTA, WP_MAIN, WP_SUB, local_value)
 
 
 def test_april_campaign_rows(april_campaign):
@@ -32,7 +33,7 @@ def test_feb_14col_variant():
 
 
 def test_election_missing_dates_filled():
-    rows, issues = parse_campaign(CAMPAIGN, "White Plus Election")
+    rows, issues = parse_campaign(CAMPAIGN, local_value("ELECTION_SHEET", "Election"))
     assert all(r.date is not None for r in rows)
     assert any("empty Date filled" in i.reason for i in issues)
     assert all(r.no is not None for r in rows)
@@ -73,10 +74,11 @@ def test_insta_layout():
 
 def test_multibrand_sections_april():
     mf = parse_matched(ALL_MAIN_APRIL)
-    assert "bkash" in mf.sections
-    assert len(mf.sections["bkash"]) > 0
+    brand = local_value("SECTION_BRAND", "acme")
+    assert brand in mf.sections
+    assert len(mf.sections[brand]) > 0
     # case-insensitive access through for_brand
-    assert mf.for_brand("BKASH") == mf.sections["bkash"]
+    assert mf.for_brand(brand.upper()) == mf.sections[brand]
 
 
 def test_multibrand_sections_pending():
@@ -95,8 +97,8 @@ def test_wide_files_parse():
     assert max(widths) >= 12
 
 
-def test_cocola_layout(tmp_path):
-    """Cocola-style sheet: category-count row under the header, per-row category
+def test_category_count_layout(tmp_path):
+    """Brand C-style sheet: category-count row under the header, per-row category
     column after Instagram, duplicate captions, and a blank Date cell."""
     from datetime import datetime
 
@@ -105,17 +107,17 @@ def test_cocola_layout(tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "June"
-    ws.append(["Cocola", None, None, None, None, None, None, None, 104, "*Total 104 Social Cards"])
+    ws.append(["Brand C", None, None, None, None, None, None, None, 104, "*Total 104 Social Cards"])
     ws.append(["No", "Date", "Content's name", "Content's Link", "Content's Link 2",
                "Content's Link 3", "X, Link 4", "Instagram"])
     # company-side bookkeeping row — how many creatives per category; not data
-    ws.append([None, None, "Jusika", 35, "Marshmallow ", 35, "Cup Noodles", 34])
+    ws.append([None, None, "Category A", 35, "Category B ", 35, "Category C", 34])
     d = datetime(2026, 6, 12)
     ws.append([1, d, "Match Schedule 12 June", "https://www.facebook.com/a", None, None,
-               "https://x.com/somoytv/status/1", "https://www.instagram.com/p/1", "Jusika"])
+               "https://x.com/somoytv/status/1", "https://www.instagram.com/p/1", "Category A"])
     ws.append([2, None, "Match Schedule 12 June", "https://www.facebook.com/b", None, None,
-               "https://x.com/somoytv/status/2", "https://www.instagram.com/p/2", "Cup Noodles"])
-    path = tmp_path / "cocola.xlsx"
+               "https://x.com/somoytv/status/2", "https://www.instagram.com/p/2", "Category C"])
+    path = tmp_path / "categories.xlsx"
     wb.save(path)
 
     rows, issues = parse_campaign(path, "June")

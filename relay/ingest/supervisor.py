@@ -4,7 +4,7 @@ Observed layouts, all with `Title` in column A:
   mainpage : Title | Views | Views_Match_1..N
   subpage  : Title | [Views |] Views_Match_1..N
   instagram: Title | Views_Match_1 | Views
-Multi-brand files carry bare brand-token separator rows ("bkash", "White Plus").
+Multi-brand files carry bare brand-token separator rows ("acme", "Brand A").
 """
 from __future__ import annotations
 

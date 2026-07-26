@@ -18,10 +18,10 @@ PREFIX_MIN_LEN = 25     # min chars for truncated-title prefix matching
 
 # --- insights export (SRS FR-16; the only source of exact Facebook figures) ---
 # Which export column becomes the report's "Views" value. Settled empirically
-# against April 2026: of the supervisor's own figures, 100% of mainpage and 94%
-# of subpage values land within 2% of an export **Views** figure and 0% match
-# Reach. (The small residual is drift — the supervisor scraped earlier and views
-# kept accruing.) So the report column has always meant Views, not Reach.
+# against a full month of hand-made figures: they track the export's **Views**
+# column, not Reach — near-exactly, the small residual being drift, since a
+# figure read by hand earlier keeps accruing views afterwards. So the report
+# column has always meant Views.
 INSIGHTS_METRIC = "views"           # "reach" | "views"
 # Meta renames and localizes export headers, so they are matched tolerantly.
 # Order matters: the first alias that matches exactly wins. "reactions" must
@@ -43,12 +43,12 @@ INSIGHTS_HEADERS = {
 }
 
 # --- heuristic (SRS FR-13; last resort only — see docs/SRS.md) ---
-# Measured against a real export (1,820 posts): views/reactions has a median of
-# 261x and reach/reactions 181x, and the ratio falls as engagement rises
-# (~413x at 1-4 reactions, ~64x at 500+). A flat multiplier therefore cannot be
-# right for most posts — these bounds are only the fallback used when the
-# export supplies no data to fit against. 70-120 is the user's own stated rule
-# (System Design Request.md).
+# Measured against a month of real export data: views/reactions spans an order
+# of magnitude, falling steeply as engagement rises — several hundred x on posts
+# with a handful of reactions, down to tens of x on the busiest ones. A flat
+# multiplier therefore cannot be right for most posts; these bounds are only the
+# fallback used when the export supplies no data to fit against. 70-120 is the
+# range the client's own manual process used.
 K_MIN, K_MAX, K_DEFAULT = 70, 120, 95
 # Reaction-count buckets used to fit k from real export data, coarse enough
 # that each bucket keeps a usable sample on a normal month.

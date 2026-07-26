@@ -18,8 +18,8 @@ def _dup_result() -> RunResult:
             cells={s: CellValue.missing() for s in ("fb1", "fb2", "fb3", "x", "ig")},
         )
     # two rows share No 1 (a stray lead row auto-numbered onto a real No 1)
-    return RunResult(brand="Cocola Food", month="June",
-                     rows=[row(1, "Jusika"), row(1, "Match Schedule"), row(2, "KHELAR")])
+    return RunResult(brand="Brand C Foods", month="June",
+                     rows=[row(1, "Category A"), row(1, "Match Schedule"), row(2, "KHELAR")])
 
 
 def test_save_run_tolerates_duplicate_no(tmp_path):

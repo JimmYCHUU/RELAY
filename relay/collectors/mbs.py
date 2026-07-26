@@ -56,8 +56,8 @@ def _reactions_anchored(content: str, tid: str | None = None) -> int | None:
     preloaded stories, arriving in COMPLETION order — so both 'first renderer'
     and 'first post_id' can point at the wrong story (the recurring 47).
     Anchor on the routing storyID and match it against each renderer's window;
-    verified live on rows 1/7/11/15 captures (657/199/308/204 vs garbage
-    29/47/329/392/486/741)."""
+    verified live against four hand-checked posts, each of whose real totals the
+    unanchored scan missed in favour of a neighbouring story's."""
     tid = tid or _target_story_id(content)
     if not tid:
         return None

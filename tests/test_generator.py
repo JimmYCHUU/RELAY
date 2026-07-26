@@ -17,7 +17,7 @@ def generated(april_result, tmp_path):
 def test_banner_and_header(generated):
     ws = generated
     assert "A1:M1" in {str(r) for r in ws.merged_cells.ranges}
-    assert ws["A1"].value.startswith("WHITE PLUS")
+    assert ws["A1"].value.startswith("BRAND A")
     assert ws["A1"].font.size == 38 and ws["A1"].font.bold
     # no campaign sheet given -> the theme's fallback accent
     assert ws["A1"].fill.fgColor.rgb.endswith(derive_palette(ACCENT_FALLBACK)["acc"])
@@ -100,7 +100,7 @@ def test_accent_detection(tmp_path):
 
 def test_accent_detection_on_real_campaign():
     from tests.conftest import CAMPAIGN
-    # White Plus campaign sheets are gray + link-blue only -> fallback applies
+    # Brand A campaign sheets are gray + link-blue only -> fallback applies
     assert detect_brand_accent(CAMPAIGN) is None
 
 

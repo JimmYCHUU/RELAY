@@ -34,7 +34,7 @@ def test_idempotent():
 
 
 def test_separator_detection():
-    for token in ("bkash", "Bkash", "White Plus", "SINGER"):
+    for token in ("acme", "Acme", "Brand A", "NORTHWIND"):
         assert is_brand_separator(token, has_values=False)
 
 
@@ -48,4 +48,4 @@ def test_caption_not_separator():
 
 
 def test_separator_with_values_is_caption():
-    assert not is_brand_separator("Bkash", has_values=True)
+    assert not is_brand_separator("Acme", has_values=True)

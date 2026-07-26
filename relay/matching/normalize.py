@@ -33,7 +33,7 @@ def _ascii_fraction(s: str) -> float:
 def is_brand_separator(title: str, has_values: bool) -> bool:
     """A bare brand token row that splits a multi-brand matched file.
 
-    Brand tokens ("bkash", "White Plus") are short, Latin-script, carry no
+    Brand tokens ("acme", "Brand A") are short, Latin-script, carry no
     sentence punctuation, and never have match values. Bengali captions fail
     the ASCII test; ASCII-looking captions fail length/punctuation/value tests.
     """

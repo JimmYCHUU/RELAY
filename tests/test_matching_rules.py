@@ -126,8 +126,8 @@ def test_k_bounds():
 
 def test_zero_reactions_never_estimated():
     """0 × k = 0, and a zero view count in a sponsor report is worse than a
-    visible gap. Measured on a real export: 76 of 1,820 posts had no reactions
-    while their real median was 531 views."""
+    visible gap. Posts with no reactions are a small but real slice of any
+    month, and they still collect hundreds of views."""
     cv = estimate_views(0)
     assert cv.value is None and cv.provenance == "missing"
     assert "cannot estimate" in cv.note

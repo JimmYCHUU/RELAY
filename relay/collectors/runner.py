@@ -138,7 +138,7 @@ def collect_facebook(result: RunResult | list[RunResult], k: float | None = None
 
     # Meta's export is the source of truth; the multiplier only ever fills what
     # it cannot account for, and its k is fitted from that same export rather
-    # than guessed (a flat 70-120 was measured right for 8.4% of posts).
+    # than guessed (a flat 70-120 was measured right for few posts).
     index = next((r.insights for r in runs if getattr(r, "insights", None)), None)
     k_table = fit_k_table(index) if index is not None and len(index) else None
     if k_table:

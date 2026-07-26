@@ -182,10 +182,11 @@ def reassign_subpage_slots(result: RunResult | list[RunResult], index: InsightsI
 
     `rules.py` assumes the supervisor's `Views_Match_1` is Somoy Shongbad and
     `Views_Match_2..N` the category pages (FR-10). It isn't: their file lists
-    values in whatever order its scraper found them, so roughly half the time
-    VM1 belongs to the category page. Measured on April 2026, **16 of 45**
-    verifiable FB cells (36%) carried a different page's number — the row total
-    stayed right while the columns were swapped.
+    values in whatever order its scraper found them, so a sizeable share of the
+    time VM1 belongs to the category page instead. Checked against the export on
+    a real month, a substantial minority of verifiable FB cells carried a
+    different page's number — the row total stayed right while the columns were
+    swapped.
 
     This does not change any number. It permutes the values the supervisor
     supplied across that row's own FB slots, choosing the arrangement that best
@@ -247,9 +248,10 @@ def fit_k_table(index: InsightsIndex, metric: str | None = None) -> dict[tuple[i
     """Fit the reactions->views multiplier from the user's own export data.
 
     A single k cannot describe this relationship: measured on a real export the
-    ratio falls steeply as engagement rises (~413x at 1-4 reactions, ~64x at
-    500+), so a flat 70-120 was right for only 8.4% of posts. Bucketing by
-    reaction count and taking each bucket's median tracks that curve.
+    ratio falls steeply as engagement rises — several hundred x on posts with a
+    handful of reactions, down to tens of x on the busiest — so a flat 70-120
+    landed close for only a small fraction of posts. Bucketing by reaction count
+    and taking each bucket's median tracks that curve.
 
     Buckets with too few samples are omitted; callers fall back to K_DEFAULT.
     """

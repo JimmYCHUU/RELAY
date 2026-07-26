@@ -20,7 +20,7 @@ def _sheet(tmp_path):
     ws.title = "April"
     ws.append(["campaign note"])
     ws.append(HEADER)
-    ws.append([1, datetime(2026, 4, 2), "White Plus demo caption", FB,
+    ws.append([1, datetime(2026, 4, 2), "Brand A demo caption", FB,
                None, None, None, None])
     ws.append([2, datetime(2026, 4, 5), None, FB, None, None, None, None])
     path = tmp_path / "campaign.xlsx"
@@ -59,7 +59,7 @@ def test_footer_summary_rows_are_not_content(tmp_path):
 
 def test_captionless_row_never_caption_matches(tmp_path):
     rows, _ = parse_campaign(_sheet(tmp_path), "April")
-    matched = [MatchedRow("White Plus demo caption", [123]),
+    matched = [MatchedRow("Brand A demo caption", [123]),
                MatchedRow("", [999])]  # a blank supervisor line must not pair up
     result = match_rows(rows, matched)
     assert result[0].tier == "exact"
