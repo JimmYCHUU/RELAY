@@ -15,6 +15,7 @@ const state = {
   selectedRow: null,  // row.no highlighted in the list
   editing: null,      // {rowNo, slot}
   collecting: { x: false, fb: false, ig: false },  // can run at once — independent browsers
+  autopilot: false,   // hands-free cycle running — excludes the manual collect buttons
   freshCells: new Set(),
 };
 
@@ -73,17 +74,34 @@ function unlockViews() {
 const fileInput = $("#fileInput");
 let pendingKind = null;
 
+// Insights takes one export per page, so its zone accepts several files at
+// once and accumulates them; every other zone holds exactly one.
+const isMulti = (kind) => !!$(`.drop[data-kind="${kind}"]`)?.dataset.multi;
+
+async function uploadMany(kind, files) {
+  for (const f of files) await uploadFile(kind, f);
+}
+
 $$(".drop").forEach((zone) => {
-  zone.addEventListener("click", () => { pendingKind = zone.dataset.kind; fileInput.click(); });
+  zone.addEventListener("click", () => {
+    pendingKind = zone.dataset.kind;
+    fileInput.multiple = !!zone.dataset.multi;
+    fileInput.click();
+  });
   zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
   zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
   zone.addEventListener("drop", (e) => {
     e.preventDefault(); zone.classList.remove("dragover");
-    if (e.dataTransfer.files[0]) uploadFile(zone.dataset.kind, e.dataTransfer.files[0]);
+    const files = [...e.dataTransfer.files];
+    if (!files.length) return;
+    uploadMany(zone.dataset.kind, zone.dataset.multi ? files : files.slice(0, 1));
   });
 });
 fileInput.addEventListener("change", () => {
-  if (fileInput.files[0] && pendingKind) uploadFile(pendingKind, fileInput.files[0]);
+  const files = [...fileInput.files];
+  if (files.length && pendingKind) {
+    uploadMany(pendingKind, isMulti(pendingKind) ? files : files.slice(0, 1));
+  }
   fileInput.value = "";
 });
 
@@ -94,10 +112,17 @@ async function uploadFile(kind, file) {
   const res = await fetch("/api/upload", { method: "POST", body: fd });
   if (!res.ok) { showError(await errText(res)); return; }
   const data = await res.json();
-  state.files[kind] = data;
   const zone = $(`.drop[data-kind="${kind}"]`);
+  if (isMulti(kind)) {
+    const list = (state.files[kind] ??= []);
+    if (!list.some((f) => f.name === data.name)) list.push(data);
+    $(".file-name", zone).textContent =
+      list.length === 1 ? list[0].name : `${list.length} exports`;
+  } else {
+    state.files[kind] = data;
+    $(".file-name", zone).textContent = data.name;
+  }
   zone.classList.add("filled");
-  $(".file-name", zone).textContent = data.name;
 
   if (kind === "campaign") {
     const sel = $("#sheet");
@@ -173,6 +198,7 @@ $("#runBtn").addEventListener("click", async () => {
     mainpage: state.files.mainpage?.path ?? null,
     subpage: state.files.subpage?.path ?? null,
     insta: state.files.insta?.path ?? null,
+    insights: (state.files.insights ?? []).map((f) => f.path),
   };
   const batch = state.pending;
   $("#runBtn").disabled = true;
@@ -710,11 +736,35 @@ function puEls(target) {
            count: $(".pu-count", u), log: $(".pu-log", u), stop: $(".pu-stop", u) };
 }
 
+/* merge freshly-scraped runs from a status poll into state, marking new cells */
+function applyRunUpdates(freshRuns) {
+  const activeId = state.run.run_id;
+  state.runs = state.runs.map((old) => {
+    const fresh = freshRuns[old.run_id];
+    if (!fresh) return old;
+    for (const row of fresh.rows) {
+      const oldRow = old.rows.find((r) => r.no === row.no);
+      for (const slot of Object.keys(row.cells)) {
+        if (row.cells[slot].value != null && oldRow && oldRow.cells[slot].value == null) {
+          state.freshCells.add(`${fresh.run_id}:${row.no}:${slot}`);
+        }
+      }
+    }
+    return fresh;
+  });
+  state.run = state.runs.find((r) => r.run_id === activeId) || state.runs[0];
+}
+
+function anyCollecting() {
+  return Object.values(state.collecting).some(Boolean);
+}
+
 async function startCollect(target) {
-  if (!state.runs.length || state.collecting[target]) return;
+  if (!state.runs.length || state.collecting[target] || state.autopilot) return;
   // always the batch endpoint: one browser session and one shared Pacer
   // budget across every brand in the cycle
-  // no k: the server randomizes the multiplier (70–150×) per estimated cell
+  // no k: the server fits the multiplier from the insights export when one is
+  // loaded, else randomizes it within 70–120× per estimated cell
   const body = { run_ids: state.runs.map((r) => r.run_id), target };
   const res = await fetch("/api/collect/batch", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -734,6 +784,7 @@ async function startCollect(target) {
   errEl.hidden = true;
   state.collecting[target] = true;
   $(COLLECT_BTN[target]).disabled = true;
+  $("#autopilotBtn").disabled = true;
   $("#collectProgress").hidden = false;
   const el = puEls(target);
   el.u.hidden = false;
@@ -754,23 +805,7 @@ async function pollCollect(target) {
   const s = await res.json();
   if (s.state === "idle") { setTimeout(() => pollCollect(target), 1200); return; }
 
-  if (s.runs) {
-    const activeId = state.run.run_id;
-    state.runs = state.runs.map((old) => {
-      const fresh = s.runs[old.run_id];
-      if (!fresh) return old;
-      for (const row of fresh.rows) {
-        const oldRow = old.rows.find((r) => r.no === row.no);
-        for (const slot of Object.keys(row.cells)) {
-          if (row.cells[slot].value != null && oldRow && oldRow.cells[slot].value == null) {
-            state.freshCells.add(`${fresh.run_id}:${row.no}:${slot}`);
-          }
-        }
-      }
-      return fresh;
-    });
-    state.run = state.runs.find((r) => r.run_id === activeId) || state.runs[0];
-  }
+  if (s.runs) applyRunUpdates(s.runs);
   const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
   el.fill.style.width = pct + "%";
   el.count.textContent = s.total ? `${s.done}/${s.total} visited · ${s.filled} filled` : "";
@@ -796,6 +831,7 @@ async function pollCollect(target) {
 function finishCollect(target, message) {
   state.collecting[target] = false;
   $(COLLECT_BTN[target]).disabled = false;
+  if (!anyCollecting() && !state.autopilot) $("#autopilotBtn").disabled = false;
   const el = puEls(target);
   el.stop.hidden = true;
   el.text.textContent = message;
@@ -842,6 +878,142 @@ async function metaSignInThenCollect(target = "fb") {
       $(COLLECT_BTN[target]).disabled = false;
       el.text.textContent = "Signed in — starting collection…";
       startCollect(target);
+      return;
+    }
+    setTimeout(poll, 2000);
+  };
+  poll();
+}
+
+/* ═════════ autopilot ═════════ */
+const AP_LABELS = { x: "X / Twitter", fb: "Facebook", ig: "Instagram" };
+
+$("#autopilotBtn").addEventListener("click", startAutopilot);
+$("#apStop").addEventListener("click", async () => {
+  if (!state.autopilot) return;
+  $("#apStop").disabled = true;
+  puEls("ap").text.textContent = "Stopping after the current post…";
+  await fetch("/api/autopilot/stop", { method: "POST" });
+});
+
+function resetApUnit() {
+  const el = puEls("ap");
+  el.u.hidden = false;
+  el.fill.style.width = "0%";
+  el.count.textContent = "";
+  el.log.innerHTML = "";
+  $("#apStage").hidden = true;
+  $("#collectProgress").hidden = false;
+  return el;
+}
+
+async function startAutopilot() {
+  if (!state.runs.length || state.autopilot || anyCollecting()) return;
+  const res = await fetch("/api/autopilot", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_ids: state.runs.map((r) => r.run_id) }),
+  });
+  const errEl = $("#collectError");
+  if (res.status === 412) {
+    // check upfront: the Meta session must exist before anything runs
+    await metaSignInThenAutopilot();
+    return;
+  }
+  if (!res.ok) {
+    errEl.textContent = await errText(res);
+    errEl.hidden = false;
+    return;
+  }
+  errEl.hidden = true;
+  state.autopilot = true;
+  $("#autopilotBtn").disabled = true;
+  Object.values(COLLECT_BTN).forEach((sel) => { $(sel).disabled = true; });
+  const el = resetApUnit();
+  el.text.textContent = "Autopilot started…";
+  $("#apStop").hidden = false;
+  $("#apStop").disabled = false;
+  pollAutopilot();
+}
+
+async function pollAutopilot() {
+  const el = puEls("ap");
+  const ids = state.runs.map((r) => r.run_id).join(",");
+  const res = await fetch(`/api/autopilot/status?ids=${ids}`);
+  if (!res.ok) { finishAutopilot("status check failed"); return; }
+  const s = await res.json();
+  if (s.state === "idle") { setTimeout(pollAutopilot, 1200); return; }
+
+  if (s.runs) applyRunUpdates(s.runs);
+  const stage = $("#apStage");
+  if (s.brand && s.target) {
+    stage.hidden = false;
+    stage.textContent = state.runs.length > 1
+      ? `${s.brand} · ${s.campaign}/${s.campaigns} · ${AP_LABELS[s.target]}`
+      : AP_LABELS[s.target];
+  }
+  const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+  el.fill.style.width = pct + "%";
+  el.count.textContent = s.total ? `${s.done}/${s.total} visited · ${s.filled} filled` : "";
+  if (s.state === "running") {
+    el.text.textContent = s.target
+      ? `Collecting ${AP_LABELS[s.target]} for ${s.brand}…` : "Starting…";
+  }
+  if (s.events?.length) {
+    el.log.innerHTML = s.events.slice().reverse()
+      .map((e) => `<li>${esc(e)}</li>`).join("");
+  }
+  recomputeCoverage();
+  renderReview();
+
+  if (s.state === "running") {
+    setTimeout(pollAutopilot, 2000);
+  } else {
+    finishAutopilot(s.message || s.state);
+    if (s.state === "error") {
+      const errEl = $("#collectError");
+      errEl.textContent = s.message;
+      errEl.hidden = false;
+    }
+  }
+}
+
+function finishAutopilot(message) {
+  state.autopilot = false;
+  $("#autopilotBtn").disabled = false;
+  Object.values(COLLECT_BTN).forEach((sel) => { $(sel).disabled = false; });
+  const el = puEls("ap");
+  $("#apStop").hidden = true;
+  el.text.textContent = message;
+  setTimeout(() => state.freshCells.clear(), 4000);
+}
+
+/* upfront Meta sign-in, then the cycle starts by itself */
+async function metaSignInThenAutopilot() {
+  const res = await fetch("/api/login/meta", { method: "POST" });
+  const errEl = $("#collectError");
+  if (!res.ok) { errEl.textContent = await errText(res); errEl.hidden = false; return; }
+  errEl.hidden = true;
+  const el = resetApUnit();
+  $("#apStop").hidden = true;
+  el.text.textContent =
+    "Autopilot needs the Meta session first. A browser window opened on this machine — " +
+    "sign in to Facebook / Meta Business Suite and instagram.com (2FA is fine), " +
+    "then close that window. Autopilot starts automatically.";
+  $("#autopilotBtn").disabled = true;
+
+  const poll = async () => {
+    const s = await (await fetch("/api/login/meta/status")).json();
+    if (s.error) {
+      $("#autopilotBtn").disabled = false;
+      el.text.textContent = "Sign-in did not complete.";
+      errEl.textContent = s.error;
+      errEl.hidden = false;
+      return;
+    }
+    if (s.ready) {
+      $("#autopilotBtn").disabled = false;
+      el.text.textContent = "Signed in — starting autopilot…";
+      startAutopilot();
       return;
     }
     setTimeout(poll, 2000);

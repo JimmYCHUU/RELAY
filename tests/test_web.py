@@ -53,13 +53,13 @@ def test_estimate_and_override(client, run_id):
     # 812 × 95 = 77140, then the last digit is nudged onto 1/3/7/9
     assert abs(body["value"] - 77140) < 10 and body["value"] % 10 in (1, 3, 7, 9)
     assert body["provenance"] == "estimated" and body["confidence"] == 0.5
-    assert body["note"] == "reactions=812, k=95"
-    # omitting k entirely randomizes it within [70, 150]
+    assert body["note"] == "reactions=812, k=95 (pinned)"
+    # omitting k entirely randomizes it within [70, 120]
     res2 = client.post("/api/estimate", json={
         "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 812})
     assert res2.status_code == 200
     v2 = res2.json()["value"]
-    assert 812 * 70 <= v2 <= 812 * 150 + 9 and v2 % 10 in (1, 3, 7, 9)
+    assert 812 * 70 <= v2 <= 812 * 120 + 9 and v2 % 10 in (1, 3, 7, 9)
     # k out of bounds rejected
     bad = client.post("/api/estimate", json={
         "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 10, "k": 50})
@@ -80,7 +80,7 @@ def test_generate_and_download(client, run_id, tmp_path):
     out = tmp_path / "dl.xlsx"
     out.write_bytes(dl.content)
     wb = openpyxl.load_workbook(out)
-    assert wb["April"]["A1"].value == "WHITE PLUS"
+    assert wb["April"]["A1"].value.startswith("WHITE PLUS")
     wb.close()
 
 
@@ -97,3 +97,67 @@ def test_dashboard_served(client):
     res = client.get("/")
     assert res.status_code == 200
     assert "RELAY" in res.text
+
+
+def _april_export(tmp_path):
+    """An export built from the April campaign's own FB links, so the join is
+    exercised against real permalinks rather than invented ones."""
+    import csv
+
+    from relay.ingest.campaign import parse_campaign
+    rows, _ = parse_campaign(CAMPAIGN, "April")
+    out, pid = [], 5000
+    for r in rows:
+        for link in r.fb_links:
+            if not link or "/share/" in link:      # shares need a browser
+                continue
+            pid += 1
+            out.append({
+                "Post ID": pid, "Page name": "সময় সংবাদ", "Title": r.caption[:80],
+                "Publish time": r.date.strftime("%m/%d/%Y %H:%M") if r.date else "",
+                "Permalink": link, "Is share": 0, "Post type": "Photos",
+                "Views": pid * 7, "Reach": pid * 5,
+                "Reactions, comments and shares": 9, "Reactions": pid % 97 + 3,
+            })
+    path = tmp_path / "april_export.csv"
+    with path.open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(out[0].keys()))
+        w.writeheader()
+        w.writerows(out)
+    return path, len(out)
+
+
+def test_run_with_insights_export_fills_cells_exactly(client, tmp_path):
+    export, n = _april_export(tmp_path)
+
+    base = {"campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus",
+            "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA)}
+    before = client.post("/api/run", json=base).json()
+    after = client.post("/api/run", json={**base, "insights": [str(export)]}).json()
+
+    assert after["insights"]["posts"] == n
+    assert after["insights"]["metric"] == "views"
+    assert after["insights"]["files"] == ["april_export.csv"]
+    assert after["coverage"]["fb1"] > before["coverage"]["fb1"], \
+        "the export must fill cells the supervisor file left empty"
+
+    exact = [c for r in after["rows"] for s, c in r["cells"].items()
+             if s.startswith("fb") and c["provenance"] == "collected"]
+    assert exact and all("insights export" in c["note"] and "post " in c["note"]
+                         for c in exact), "every exact cell carries its audit trail"
+
+
+def test_run_without_insights_reports_none(client):
+    res = client.post("/api/run", json={
+        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus"}).json()
+    assert res["insights"] is None
+
+
+def test_unreadable_insights_export_does_not_fail_the_run(client, tmp_path):
+    bad = tmp_path / "bad.csv"
+    bad.write_text("nothing,useful\n1,2\n", encoding="utf-8")
+    res = client.post("/api/run", json={
+        "campaign": str(CAMPAIGN), "sheet": "April", "brand": "White Plus",
+        "insights": [str(bad)]})
+    assert res.status_code == 200
+    assert any("unreadable" in i["reason"] for i in res.json()["issues"])

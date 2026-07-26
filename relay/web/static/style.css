@@ -560,7 +560,16 @@ input:disabled, select:disabled {
 .tile .t-value.warn { color: var(--critical); }
 
 .collect-panel { margin-bottom: 16px; }
-.collect-head { margin-bottom: 14px; }
+.collect-head {
+  margin-bottom: 14px; display: flex; justify-content: space-between;
+  align-items: flex-start; gap: 16px; flex-wrap: wrap;
+}
+.autopilot-cta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.autopilot-cta .hint { font-size: 12px; }
+.ap-stage {
+  font-weight: 650; font-size: 12px; color: var(--accent);
+  background: var(--accent-soft); border-radius: 999px; padding: 2px 10px; margin-left: 4px;
+}
 .collect-head strong { font-size: 15px; display: inline-flex; align-items: center; gap: 8px; }
 .collect-head strong .ic-svg { color: var(--warning); }
 .collect-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }

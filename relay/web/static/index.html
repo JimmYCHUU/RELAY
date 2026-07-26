@@ -203,6 +203,15 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <span class="file-name" data-empty="Click or drop .xlsx"></span>
       </div>
     </div>
+    <div class="drop" data-kind="insights" data-multi="1" tabindex="0">
+      <div class="drop-icon ic-amber"><svg class="ic-svg"><use href="#i-zap"/></svg></div>
+      <div class="drop-body">
+        <div class="drop-head"><strong>Insights export</strong><span class="opt">recommended</span></div>
+        <p>Business Suite content export — exact Reach per post, matched by link.
+           One file per page; drop several.</p>
+        <span class="file-name" data-empty="Click or drop .csv / .xlsx"></span>
+      </div>
+    </div>
   </div>
 
   <div class="card run-panel">
@@ -238,9 +247,16 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
 
   <div class="card collect-panel">
     <div class="collect-head">
-      <strong><svg class="ic-svg"><use href="#i-zap"/></svg> Auto-fill missing values</strong>
-      <p class="hint">Scrapers run right here, politely paced so your accounts stay safe.
-      Values land in the table live.</p>
+      <div>
+        <strong><svg class="ic-svg"><use href="#i-zap"/></svg> Auto-fill missing values</strong>
+        <p class="hint">Scrapers run right here, politely paced so your accounts stay safe.
+        Values land in the table live.</p>
+      </div>
+      <div class="autopilot-cta">
+        <button id="autopilotBtn" class="primary lg">
+          <svg class="ic-svg"><use href="#i-zap"/></svg> Autopilot</button>
+        <span class="hint">X → FB → IG, one campaign after another</span>
+      </div>
     </div>
     <div class="collect-actions">
       <div class="collect-card">
@@ -251,10 +267,11 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       </div>
       <div class="collect-card">
         <div class="collect-title"><svg class="ic-svg"><use href="#i-facebook"/></svg> Facebook missing cells</div>
-        <p>Uses the Meta session from <strong>Accounts</strong>. Shared posts are resolved
-           to the original post and read as <strong>real views</strong> — a reactions
-           estimate (random 70–150× per post) is only the last resort when no views
-           figure is visible, and those cells are marked ≈.</p>
+        <p>Runs after the <strong>insights export</strong>, which already fills every
+           post it covers with Meta's exact figure. This resolves shared links and
+           re-checks the export for them. A reactions estimate is the last resort
+           only — its multiplier is fitted from your own export data, and those
+           cells are marked ≈.</p>
         <div class="collect-fb-row">
           <button id="collectFB" class="primary">Collect Facebook</button>
         </div>
@@ -263,12 +280,25 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <div class="collect-title"><svg class="ic-svg"><use href="#i-camera"/></svg> Instagram missing cells</div>
         <p>Reads each post page through the same Meta session — reels report
            <strong>real views</strong>; photo posts have no view figure, so likes ×
-           a random 70–150 multiplier fills them, marked ≈. Handy when there is
+           a fitted multiplier fills them, marked ≈. Handy when there is
            no supervisor match file at all.</p>
         <button id="collectIG" class="primary">Collect Instagram</button>
       </div>
     </div>
     <div id="collectProgress" class="collect-progress" hidden>
+      <div class="progress-unit" data-unit="ap" hidden>
+        <div class="progress-head">
+          <strong><svg class="ic-svg"><use href="#i-zap"/></svg> Autopilot
+            <span class="ap-stage" id="apStage" hidden></span></strong>
+          <span class="progress-right">
+            <span class="pu-count"></span>
+            <button class="ghost stop-btn" id="apStop">Stop</button>
+          </span>
+        </div>
+        <div class="progress-track"><div class="progress-fill pu-fill"></div></div>
+        <div class="progress-meta"><span class="pu-text">Starting…</span></div>
+        <ul class="progress-log pu-log"></ul>
+      </div>
       <div class="progress-unit" data-unit="x" hidden>
         <div class="progress-head">
           <strong><svg class="ic-svg"><use href="#i-x"/></svg> X / Twitter</strong>
@@ -455,10 +485,12 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <input id="reactions" type="number" min="0" placeholder="e.g. 812">
       </label>
       <label>Multiplier k <output id="kOut">95</output>
-        <input id="kSlider" type="range" min="70" max="150" value="95">
+        <input id="kSlider" type="range" min="70" max="120" value="95">
       </label>
-      <p class="hint">views ≈ reactions × k &nbsp;(70–150; the last digit is
-        auto-nudged so estimates never end in 0 or 5)</p>
+      <p class="hint">views ≈ reactions × k &nbsp;(70–120; the last digit is
+        auto-nudged so estimates never end in 0 or 5). Leave the slider alone to
+        let RELAY fit k from your insights export — a flat multiplier matched only
+        8% of real posts.</p>
     </div>
     <div class="tab-pane" data-pane="manual" hidden>
       <label>Views value
@@ -474,7 +506,7 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
 </dialog>
 
 <div id="tooltip" class="tooltip" hidden></div>
-<input type="file" id="fileInput" accept=".xlsx" hidden>
+<input type="file" id="fileInput" accept=".xlsx,.csv" hidden>
 <script src="app.js"></script>
 </body>
 </html>

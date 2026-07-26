@@ -41,13 +41,16 @@ python -m relay.cli serve            # dashboard on :8501
 2. Get the three matched files from your supervisor (mainpage / subpage / insta) —
    optional, but they auto-resolve most cells. Multi-brand files with `Bkash`-style
    separator rows work as-is; RELAY finds the right section.
-3. Open the dashboard → drop files → pick brand + month tab → **Run matching**.
-4. Review: green = matched, amber = estimated, blue = manual, red outline =
-   missing. Click ✎ on any cell to estimate from reactions (your 70–120× rule)
-   or type an exact value.
-5. **Generate .xlsx** → download → e-mail it. Untick "mark estimated cells" for
+3. Export your content data from Meta Business Suite (Insights → Content →
+   export) and drop it in too — **one file covers all your pages**, so this is a
+   single download per month, not one per page. It carries Meta's **exact** Views
+   per post, which is what the report's Views column has always meant.
+4. Open the dashboard → drop files → pick brand + month tab → **Run matching**.
+5. Review: green = matched, amber = estimated, blue = manual, red outline =
+   missing. Click ✎ on any cell to estimate from reactions or type an exact value.
+6. **Generate .xlsx** → download → e-mail it. Untick "mark estimated cells" for
    the sponsor-facing copy.
-6. Optionally drop last cycle's hand-made report under *Cross-check* to verify
+7. Optionally drop last cycle's hand-made report under *Cross-check* to verify
    RELAY cell-by-cell.
 
 ## CLI
@@ -63,13 +66,20 @@ python -m relay.cli run \
   --mainpage "white plus mainpage matched (1).xlsx" \
   --subpage  "white plus subpage matched (2).xlsx" \
   --insta    "white plus insta matched (3).xlsx" \
+  --insights "WhitePlusApril.csv" \
   --reference "White Plus FB Photocard (April).xlsx"
 ```
 
+`--insights` takes a Business Suite content export. One export normally covers
+every page, so a single `--insights` is usually enough; the flag repeats if you
+export pages separately. It is the source of exact Facebook figures — everything
+below is only for what no export covers.
+
 ## Collectors (opt-in browser automation)
 
-Collectors fill what the matched files can't: real public X view counts, and
-Facebook views/reactions via your own Meta Business Suite session.
+Collectors fill what the exports and matched files can't: real public X view
+counts, resolution of `share/p` links back to a post the export knows, and the
+reaction totals that feed the last-resort estimate.
 
 ```bash
 python -m relay.cli login meta        # one-time headed login (2FA fine; cookies stay local)
@@ -90,8 +100,30 @@ never entered or stored anywhere — X collection is public-page only.
 | FB Link 1 (Somoy News TV) | mainpage file `Views_Match_1` |
 | FB Link 2 (Somoy Shongbad) | subpage file `Views_Match_1` |
 | FB Link 3 (category subpage) | **highest** of subpage `Views_Match_2..N` (extras are scraper snapshots; discards logged) |
+| …but see below | with an export loaded, these two get **reordered onto the right columns** |
 | Instagram | insta file `Views_Match_1` |
 | X impressions | collector only — never fabricated |
+
+**The export also fixes which column a value belongs in.** Your supervisor's
+`Views_Match_N` order doesn't track Link 2 / Link 3 — on April 2026 that put
+36% of checkable cells on the wrong page's column (row totals were right, the
+columns were swapped). With an export loaded, RELAY reorders their values onto
+the columns the export attributes them to. It never changes a number, only which
+cell it sits in, and each moved value says where it came from.
+
+Where the supervisor's file has no value, RELAY reads the **exact** figure from
+your Business Suite export. It cannot match on the link alone — Facebook's
+`pfbid` blobs differ between a copied link and the export — so it joins on the
+caption (scoped to the same page and ±3 days) and, for mainpage posts whose
+headline was rewritten, on Meta's numeric post id read from the live page. Each
+filled cell carries a comment naming the export file and post id, so the sponsor
+can trace the number back to a row in the file you hand them.
+
+The reactions × k estimate is the last resort only — for posts no export covers.
+Its multiplier is fitted from your own export data rather than guessed: measured
+across 1,820 real posts, reach/reactions ranged from ~294× at 1–4 reactions down
+to ~61× at 500+, so a single fixed multiplier matched fewer than a fifth of them.
+Posts with zero reactions are left blank rather than estimated as zero.
 
 Anything unresolved is *flagged*, never guessed; estimates are always labeled
 with the reactions and k used.
@@ -99,11 +131,12 @@ with the reactions and k used.
 ## Tests
 
 ```bash
-pytest            # 57 tests, incl. cell-by-cell E2E vs the real April report
+pytest            # 153 tests, incl. cell-by-cell E2E vs the real April report
 ```
 
 > **Data privacy:** the sample workbooks (campaign sheets, supervisor matched
 > files, hand-made reports) contain real sponsor performance data and are
-> deliberately **excluded from git** (`*.xlsx` in `.gitignore`). Keep them next
+> deliberately **excluded from git** (`*.xlsx` and `*.csv` in `.gitignore`, the
+> latter covering Business Suite exports). Keep them next
 > to the repo locally to run the full E2E suite; without them the file-dependent
 > tests skip automatically, which is what CI does.

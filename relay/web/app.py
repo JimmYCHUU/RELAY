@@ -24,6 +24,47 @@ UPLOADS = config.DATA_DIR / "uploads"
 _runs: dict[str, RunResult] = {}
 _run_db_ids: dict[str, int] = {}
 _run_inputs: dict[str, dict] = {}
+_MAX_RUNS = 32
+
+
+def _evict_runs() -> None:
+    """_runs is per-session working memory, not history — cap it. An evicted
+    run is recoverable through /api/run: the SQLite checkpoints restore every
+    collected value."""
+    while len(_runs) > _MAX_RUNS:
+        old = next(iter(_runs))
+        _runs.pop(old, None)
+        _run_db_ids.pop(old, None)
+        _run_inputs.pop(old, None)
+
+
+def _persist_cb(pairs):
+    """Checkpoint hook for the collector threads: maps each RunResult back to
+    its DB run id and writes every filled cell to SQLite as it lands, so a
+    crash/power-off mid-collection loses nothing."""
+    ids = {id(res): db_id for res, db_id in pairs}
+
+    def persist(run, row_idx, slot, cell):
+        db_id = ids.get(id(run))
+        if db_id is not None:
+            store.update_cell(db_id, row_idx, slot, cell)
+    return persist
+
+
+def _insights_summary(result: RunResult) -> dict | None:
+    """What the export accounted for, so the dashboard can show the user how
+    much of the report is exact rather than estimated."""
+    index = getattr(result, "insights", None)
+    if index is None or not len(index):
+        return None
+    exact = sum(1 for r in result.rows for s in ("fb1", "fb2", "fb3")
+                if r.links.get(s) and r.cells[s].provenance == "collected")
+    return {
+        "posts": len(index),
+        "files": [Path(f).name for f in index.files],
+        "filled": exact,
+        "metric": config.INSIGHTS_METRIC,
+    }
 
 
 def _serialize(run_id: str, result: RunResult) -> dict:
@@ -34,6 +75,7 @@ def _serialize(run_id: str, result: RunResult) -> dict:
         "coverage": result.coverage(),
         "issues": [vars(i) for i in result.issues],
         "tiers": result.match_tiers,
+        "insights": _insights_summary(result),
         "rows": [
             {
                 "no": r.no,
@@ -77,6 +119,9 @@ class RunReq(BaseModel):
     mainpage: str | None = None
     subpage: str | None = None
     insta: str | None = None
+    # One Business Suite content export per page — exact Reach/Views, matched
+    # to campaign rows by permalink rather than caption.
+    insights: list[str] = Field(default_factory=list)
 
 
 @app.post("/api/run")
@@ -85,15 +130,26 @@ def run(req: RunReq) -> dict:
         result = run_pipeline(
             req.campaign, req.sheet, req.brand,
             mainpage_path=req.mainpage, subpage_path=req.subpage, insta_path=req.insta,
+            insights_paths=list(req.insights) or None,
         )
     except (ValueError, FileNotFoundError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    inputs = req.model_dump()
+    # Resume: inherit values a previous run of the same campaign/sheet/brand
+    # already collected (checkpointed per cell), so a crash, power-off, or
+    # dashboard restart never re-scrapes what's done.
+    restored = 0
+    prev_id = store.find_resumable_run(inputs)
+    if prev_id:
+        restored = store.hydrate_cells(result, store.load_cells(prev_id))
     run_id = uuid.uuid4().hex[:12]
     _runs[run_id] = result
-    inputs = req.model_dump()
     _run_inputs[run_id] = inputs
     _run_db_ids[run_id] = store.save_run(result, inputs)
-    return _serialize(run_id, result)
+    _evict_runs()
+    out = _serialize(run_id, result)
+    out["restored"] = restored
+    return out
 
 
 def _get_run(run_id: str) -> RunResult:
@@ -129,13 +185,19 @@ def _find_row(result: RunResult, row_no: int):
 def estimate(req: EstimateReq) -> dict:
     result = _get_run(req.run_id)
     row = _find_row(result, req.row_no)
+    k_table = None
+    index = getattr(result, "insights", None)
+    if index is not None and len(index):
+        from ..resolve.insights_fill import fit_k_table
+        k_table = fit_k_table(index)
     try:
-        row.cells[req.slot] = apply_estimate(row.cells[req.slot], req.reactions, req.k)
+        row.cells[req.slot] = apply_estimate(row.cells[req.slot], req.reactions,
+                                             req.k, k_table=k_table)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    store.record_override(_run_db_ids[req.run_id], req.row_no, req.slot,
-                          None, row.cells[req.slot].value)
     c = row.cells[req.slot]
+    store.record_override(_run_db_ids[req.run_id], req.row_no, req.slot,
+                          None, c.value, cell=c)
     return {"value": c.value, "provenance": c.provenance, "confidence": c.confidence,
             "note": c.note}
 
@@ -163,6 +225,10 @@ class BatchCollectReq(BaseModel):
 _batch_jobs: dict[str, "Progress"] = {}
 
 
+def _autopilot_running() -> bool:
+    return _autopilot_job is not None and _autopilot_job.state == "running"
+
+
 @app.post("/api/collect/batch")
 def collect_batch(req: BatchCollectReq) -> dict:
     """One collection pass over every brand in the cycle — a single browser
@@ -178,23 +244,29 @@ def collect_batch(req: BatchCollectReq) -> dict:
     existing = _batch_jobs.get(req.target)
     if existing and existing.state == "running":
         raise HTTPException(409, "collection already running for this target")
+    if _autopilot_running():
+        raise HTTPException(409, "autopilot is running — stop it first")
     if req.target in ("fb", "ig") and not req.dry_run and not meta_profile_exists():
         raise HTTPException(412, "meta-session-required")
 
     progress = Progress()
     _batch_jobs[req.target] = progress
+    persist = _persist_cb([(res, _run_db_ids[rid])
+                           for rid, res in zip(req.run_ids, results)])
 
     def work():
         if req.target == "x":
             pacer = Pacer(min_delay=config.X_PACE_MIN_S,
                           max_delay=config.X_PACE_MAX_S, dry_run=req.dry_run)
-            collect_x(results, pacer=pacer, progress=progress)
+            collect_x(results, pacer=pacer, progress=progress, persist=persist)
         elif req.target == "ig":
             pacer = Pacer(dry_run=req.dry_run)
-            collect_instagram(results, req.k, pacer=pacer, progress=progress)
+            collect_instagram(results, req.k, pacer=pacer, progress=progress,
+                              persist=persist)
         else:
             pacer = Pacer(dry_run=req.dry_run)
-            collect_facebook(results, req.k, pacer=pacer, progress=progress)
+            collect_facebook(results, req.k, pacer=pacer, progress=progress,
+                             persist=persist)
 
     threading.Thread(target=work, daemon=True, name=f"collect-batch-{req.target}").start()
     return {"started": True, "target": req.target, "runs": len(results)}
@@ -223,6 +295,150 @@ def collect_batch_stop(target: str) -> dict:
     return {"stopping": True}
 
 
+class AutopilotReq(BaseModel):
+    run_ids: list[str] = Field(min_length=1)
+    # None -> a fresh random k per estimated cell (the default behaviour)
+    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
+    dry_run: bool = False
+
+
+class AutopilotJob:
+    """Cycle-level progress: one campaign after another in load order,
+    X → FB → IG within each."""
+
+    def __init__(self, run_ids: list[str]):
+        self.run_ids = run_ids
+        self.campaigns = len(run_ids)
+        self.campaign_idx = 0
+        self.brand = ""
+        self.target = ""
+        self.sub = None                  # the running collector's Progress
+        self.state = "running"           # running | finished | stopped | error
+        self.message = ""
+        self.stop_requested = False
+        self.events: list[str] = []
+
+    def log(self, line: str) -> None:
+        self.events.append(line)
+        del self.events[:-60]
+
+
+_autopilot_job: AutopilotJob | None = None
+
+
+@app.post("/api/autopilot")
+def autopilot_start(req: AutopilotReq) -> dict:
+    """Hands-free cycle: every campaign in load order, X → FB → IG within
+    each, one Pacer budget per platform across the whole cycle. The Meta
+    session is checked up front — nothing runs until it exists."""
+    import threading
+
+    from ..collectors.base import Pacer
+    from ..collectors.runner import (Progress, collect_facebook,
+                                     collect_instagram, collect_x,
+                                     meta_profile_exists)
+
+    global _autopilot_job
+    results = [_get_run(rid) for rid in req.run_ids]
+    if _autopilot_running():
+        raise HTTPException(409, "autopilot already running")
+    others = list(_batch_jobs.values()) + list(_jobs.values())
+    if any(p.state == "running" for p in others):
+        raise HTTPException(409, "a collection is already running — stop it first")
+
+    def needs_meta(result: RunResult) -> bool:
+        return any(row.links.get(slot) and row.cells[slot].value is None
+                   for row in result.rows for slot in ("fb1", "fb2", "fb3", "ig"))
+
+    if not req.dry_run and any(needs_meta(r) for r in results) \
+            and not meta_profile_exists():
+        raise HTTPException(412, "meta-session-required")
+
+    job = AutopilotJob(req.run_ids)
+    _autopilot_job = job
+    pacers = {
+        "x": Pacer(min_delay=config.X_PACE_MIN_S, max_delay=config.X_PACE_MAX_S,
+                   dry_run=req.dry_run),
+        "fb": Pacer(dry_run=req.dry_run),
+        "ig": Pacer(dry_run=req.dry_run),
+    }
+    persist = _persist_cb([(res, _run_db_ids[rid])
+                           for rid, res in zip(req.run_ids, results)])
+    collectors = {
+        "x": lambda res, sub: collect_x(res, pacer=pacers["x"], progress=sub,
+                                        persist=persist),
+        "fb": lambda res, sub: collect_facebook(res, req.k, pacer=pacers["fb"],
+                                                progress=sub, persist=persist),
+        "ig": lambda res, sub: collect_instagram(res, req.k, pacer=pacers["ig"],
+                                                 progress=sub, persist=persist),
+    }
+    labels = {"x": "X", "fb": "Facebook", "ig": "Instagram"}
+
+    def work():
+        filled = 0
+        try:
+            for idx, result in enumerate(results, start=1):
+                if job.stop_requested:
+                    break
+                job.campaign_idx, job.brand = idx, result.brand
+                for target in ("x", "fb", "ig"):
+                    if job.stop_requested:
+                        break
+                    sub = Progress()
+                    job.target, job.sub = target, sub
+                    collectors[target](result, sub)
+                    filled += sub.filled
+                    job.log(f"{result.brand} · {labels[target]}: {sub.message}")
+                    if sub.state == "stopped" and not sub.stop_requested:
+                        # pacing budget or challenge page — halt the whole
+                        # cycle; a later re-run picks up the remaining cells
+                        job.state, job.message = "stopped", sub.message
+                        return
+            if job.stop_requested:
+                job.state = "stopped"
+                job.message = f"stopped — {filled} cells filled so far"
+            else:
+                job.state = "finished"
+                job.message = (f"autopilot done — {filled} cells filled across "
+                               f"{job.campaigns} campaign(s)")
+        except Exception as exc:
+            job.state, job.message = "error", f"{type(exc).__name__}: {exc}"
+
+    threading.Thread(target=work, daemon=True, name="autopilot").start()
+    return {"started": True, "campaigns": job.campaigns}
+
+
+@app.get("/api/autopilot/status")
+def autopilot_status(ids: str = "") -> dict:
+    id_list = [i for i in ids.split(",") if i]
+    runs = {rid: _serialize(rid, _get_run(rid)) for rid in id_list}
+    job = _autopilot_job
+    if job is None:
+        return {"state": "idle", "runs": runs}
+    sub = job.sub
+    events = job.events + (sub.events if sub else [])
+    return {
+        "state": job.state, "message": job.message,
+        "brand": job.brand, "campaign": job.campaign_idx,
+        "campaigns": job.campaigns, "target": job.target,
+        "total": sub.total if sub else 0, "done": sub.done if sub else 0,
+        "filled": sub.filled if sub else 0, "current": sub.current if sub else "",
+        "events": events[-8:],
+        "runs": runs,
+    }
+
+
+@app.post("/api/autopilot/stop")
+def autopilot_stop() -> dict:
+    job = _autopilot_job
+    if job is None or job.state != "running":
+        return {"stopping": False}
+    job.stop_requested = True
+    if job.sub:
+        job.sub.stop_requested = True
+    return {"stopping": True}
+
+
 class BatchReportReq(BaseModel):
     run_ids: list[str] = Field(min_length=1)
     comments: bool = True
@@ -238,7 +454,8 @@ def generate_batch(req: BatchReportReq) -> dict:
     paths = []
     for rid, result in zip(req.run_ids, results):
         out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
-        build_report(result, out, estimate_comments=req.comments)
+        build_report(result, out, estimate_comments=req.comments,
+                     campaign_path=_run_inputs.get(rid, {}).get("campaign"))
         store.set_output(_run_db_ids[rid], str(out))
         paths.append(out)
     month = results[0].month
@@ -263,7 +480,8 @@ def download_batch(name: str):
 def generate(run_id: str, comments: bool = True) -> dict:
     result = _get_run(run_id)
     out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
-    build_report(result, out, estimate_comments=comments)
+    build_report(result, out, estimate_comments=comments,
+                 campaign_path=_run_inputs.get(run_id, {}).get("campaign"))
     store.set_output(_run_db_ids[run_id], str(out))
     return {"path": str(out), "name": out.name}
 
@@ -350,24 +568,29 @@ def collect(req: CollectReq) -> dict:
     existing = _jobs.get(key)
     if existing and existing.state == "running":
         raise HTTPException(409, "collection already running for this run")
+    if _autopilot_running():
+        raise HTTPException(409, "autopilot is running — stop it first")
     if req.target in ("fb", "ig") and not req.dry_run and not meta_profile_exists():
         # 412 → the dashboard auto-opens the sign-in browser via /api/login/meta
         raise HTTPException(412, "meta-session-required")
 
     progress = Progress()
     _jobs[key] = progress
+    persist = _persist_cb([(result, _run_db_ids[req.run_id])])
 
     def work():
         if req.target == "x":
             pacer = Pacer(min_delay=config.X_PACE_MIN_S,
                           max_delay=config.X_PACE_MAX_S, dry_run=req.dry_run)
-            collect_x(result, pacer=pacer, progress=progress)
+            collect_x(result, pacer=pacer, progress=progress, persist=persist)
         elif req.target == "ig":
             pacer = Pacer(dry_run=req.dry_run)
-            collect_instagram(result, req.k, pacer=pacer, progress=progress)
+            collect_instagram(result, req.k, pacer=pacer, progress=progress,
+                              persist=persist)
         else:
             pacer = Pacer(dry_run=req.dry_run)
-            collect_facebook(result, req.k, pacer=pacer, progress=progress)
+            collect_facebook(result, req.k, pacer=pacer, progress=progress,
+                             persist=persist)
 
     threading.Thread(target=work, daemon=True, name=f"collect-{req.target}").start()
     return {"started": True, "target": req.target}
