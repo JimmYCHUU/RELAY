@@ -30,9 +30,15 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(reason="local sample workbooks not present (excluded from git)")
     file_bound = {"test_ingest", "test_e2e", "test_web", "test_generator"}
+    # Fixtures that open a sample workbook themselves, in modules whose other
+    # tests are synthetic — skipping the whole module would cost real coverage,
+    # so these are skipped per-test instead. `two_runs` posts CAMPAIGN to
+    # /api/run, which is a 400 rather than a skip when the file is absent.
+    file_bound_fixtures = {"april_result", "two_runs"}
     for item in items:
         mod = item.module.__name__.split(".")[-1]
-        if mod in file_bound or "april_result" in getattr(item, "fixturenames", ()):
+        fixtures = set(getattr(item, "fixturenames", ()))
+        if mod in file_bound or fixtures & file_bound_fixtures:
             item.add_marker(skip)
 
 
