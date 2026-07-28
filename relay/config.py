@@ -28,33 +28,65 @@ INSIGHTS_METRIC = "views"           # "reach" | "views"
 # stay ahead of nothing else in its own list, but note the real export also has
 # a "Reactions, comments and shares" column — resolve_headers() claims exact
 # matches first so that one can never be mistaken for "Reactions".
+# The Instagram export is the same shape with different words for the same
+# things — "Account name" for the page, "Likes" for reactions, "Description" for
+# the caption — so one alias table serves both rather than two parsers.
 INSIGHTS_HEADERS = {
     "post_id":    ("post id", "post_id"),
-    "page_id":    ("page id", "page_name id", "page_id"),
-    "page_name":  ("page name", "page"),
+    "page_id":    ("page id", "page_name id", "page_id", "account id"),
+    "page_name":  ("page name", "account name", "account username", "page"),
     "title":      ("title", "message", "post message", "description"),
     "permalink":  ("permalink", "permalink url", "post link", "url", "link"),
     "published":  ("publish time", "publish date", "created time", "date published"),
-    "views":      ("views", "impressions", "post impressions", "total views"),
+    "views":      ("views", "impressions", "post impressions", "total views", "plays"),
     "reach":      ("reach", "post reach", "people reached", "accounts reached"),
-    "reactions":  ("reactions", "post reactions", "likes and reactions"),
+    # "likes" last: on a Facebook export "Likes and reactions" must still win, and
+    # exact matches are claimed before any substring pass (see resolve_headers).
+    "reactions":  ("reactions", "post reactions", "likes and reactions", "likes"),
     "post_type":  ("post type", "type", "media type"),
     "is_share":   ("is share", "shared post"),
 }
+# Bar for the boilerplate-stripped caption key (matching.normalize.strip_boilerplate).
+# Deliberately far above FUZZY_HIGH: stripping the tail leaves a short token set,
+# and token_set_ratio on a short set can miss the single word that reverses a
+# headline's meaning. Near-identity only — see that function's docstring.
+INSIGHTS_STRIPPED_HIGH = 0.98
+# How far a campaign row's date may sit from the export row's publish time.
+CAPTION_WINDOW_DAYS = 3
+# `/share/p/…` and `/photo/?fbid=…&set=a.…` links name no page, so the page is
+# inferred from where that slot's other links in the same sheet point. The
+# inference is only used when the winning page outweighs its nearest rival by
+# this factor; below it the cell is left empty and the reason recorded. Measured
+# on June: at 3x the inference stays right for 99.5% of cells it accepts, and
+# raising it further only declines more without correcting anything.
+SLOT_PAGE_DOMINANCE = 3.0
 
-# --- heuristic (SRS FR-13; last resort only — see docs/SRS.md) ---
-# Measured against a month of real export data: views/reactions spans an order
-# of magnitude, falling steeply as engagement rises — several hundred x on posts
-# with a handful of reactions, down to tens of x on the busiest ones. A flat
-# multiplier therefore cannot be right for most posts; these bounds are only the
-# fallback used when the export supplies no data to fit against. 70-120 is the
-# range the client's own manual process used.
-K_MIN, K_MAX, K_DEFAULT = 70, 120, 95
-# Reaction-count buckets used to fit k from real export data, coarse enough
-# that each bucket keeps a usable sample on a normal month.
-K_BUCKETS = ((1, 4), (5, 9), (10, 24), (25, 49), (50, 99), (100, 249),
-             (250, 499), (500, 10**9))
-K_BUCKET_MIN_SAMPLES = 12           # below this a bucket falls back to K_DEFAULT
+# --- caption repair (SRS FR-13b) ---
+# Campaign sheets are hand-maintained: a caption gets edited on the post and
+# nobody updates the sheet, so the caption join fails for that row's every slot
+# at once. One browser visit identifies one post; the row's other posts are then
+# found offline, because Somoy cross-posts a story to several pages minutes
+# apart and the export records each.
+#
+# These three compare one export title against another — both Meta's own text —
+# so the bar is near-identity, unlike the sheet-caption comparison in `_score`.
+# A genuine cross-post is usually verbatim (median agreement 1.000), which is
+# what leaves room to set the bar this high.
+#
+# Measured over 481 already-matched June cells, at MARGIN 0.05 and a 90-minute
+# window: 0.95 gives 445 right / 3 wrong / 33 declined, and 0.98 gives 447 / 3 /
+# 31 — a tighter bar declines *less*, because it stops near-misses from
+# crowding the runner-up margin. 0.99 starts losing real cross-posts.
+#
+# 0.98 is also what it takes to keep "স্বর্ণের দাম … বাড়ানোর" (raised) away from
+# "… কমানোর" (cut): one word apart in a ten-word headline, a different post, and
+# they agree 0.954. Dropping the runner-up margin costs accuracy on its own
+# (7 wrong) — it is the guard against Somoy running one story twice on a page.
+# Widening the window past 90 minutes changes nothing.
+REPAIR_SIBLING_HIGH = 0.98
+REPAIR_SIBLING_MARGIN = 0.05
+REPAIR_SIBLING_WINDOW_MIN = 90
+
 
 # --- collector pacing (SRS NFR-6, hard account-safety budgets) ---
 PACE_MIN_S, PACE_MAX_S = 8.0, 15.0          # authenticated FB/MBS session — do not lower

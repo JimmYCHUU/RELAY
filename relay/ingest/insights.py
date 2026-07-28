@@ -26,16 +26,31 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import config
-from ..matching.permalink import normalize_fb_url, post_token
+from ..matching.permalink import (ig_shortcode, normalize_fb_url, page_slug,
+                                  post_token)
 from ..models import InsightsRow, RowIssue
 
 log = logging.getLogger("relay.ingest")
 
 _WS = re.compile(r"\s+")
 _TRUTHY = {"1", "true", "yes", "y"}
+# Dashboard uploads are stored under a random per-upload prefix
+# ("48bcbfb9_combine.csv"), which is not the filename anyone was handed.
+_UPLOAD_PREFIX = re.compile(r"^[0-9a-f]{8}_(.+)$")
 # Meta writes "07/15/2026 00:14"; other locales/exports vary, so try a short list.
 _TIME_FORMATS = ("%m/%d/%Y %H:%M", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
                  "%Y-%m-%d", "%d/%m/%Y %H:%M", "%d/%m/%Y")
+
+
+def display_name(name: str) -> str:
+    """An export's filename as the client knows it, for anything a human reads.
+
+    A figure is only auditable if the file it cites is one the reader can find;
+    the upload prefix makes the note point at a name that exists nowhere but
+    RELAY's own uploads directory.
+    """
+    hit = _UPLOAD_PREFIX.match(name or "")
+    return hit.group(1) if hit else (name or "")
 
 
 def _norm_header(name: object) -> str:
@@ -125,6 +140,14 @@ class InsightsIndex:
     # mainpage post's headline is often rewritten so captions won't match it
     # either, so for those rows this is the only key that works.
     by_post_id: dict[str, InsightsRow] = field(default_factory=dict)
+    # Numeric page id -> the vanity slug that page's permalinks use. A campaign
+    # sheet's `/photo/?fbid=…&set=pb.<page-id>` links name the page by id only,
+    # and the export is the one place both spellings appear side by side.
+    page_slugs: dict[str, str] = field(default_factory=dict)
+    # Instagram shortcode -> row. The exact opposite of Facebook's situation: the
+    # code in a copied Instagram link is the code in the export, so this join
+    # needs no browser and no caption.
+    by_shortcode: dict[str, InsightsRow] = field(default_factory=dict)
     rows: list[InsightsRow] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     issues: list[RowIssue] = field(default_factory=list)
@@ -142,6 +165,20 @@ class InsightsIndex:
                 self.by_token.setdefault(tok, row)
             if row.post_id:
                 self.by_post_id.setdefault(row.post_id, row)
+            slug = page_slug(row.permalink)
+            if row.page_id and slug:
+                self.page_slugs.setdefault(row.page_id, slug)
+            code = ig_shortcode(row.permalink)
+            if code:
+                self.by_shortcode.setdefault(code, row)
+
+    def slug_for_page_id(self, page_id: str | None) -> str | None:
+        return self.page_slugs.get(str(page_id)) if page_id else None
+
+    def lookup_ig(self, url: str | None) -> InsightsRow | None:
+        """Join an Instagram campaign link to its export row by shortcode."""
+        code = ig_shortcode(url)
+        return self.by_shortcode.get(code) if code else None
 
     def lookup(self, url: str | None) -> InsightsRow | None:
         key = normalize_fb_url(url)

@@ -7,6 +7,11 @@ data/
 System Design Request.md
 # the sample filenames name the sponsor, so they stay local too
 tests/samples_local.py
+# the history scrub's own leftovers: the replacement map lists every real client
+# identifier that was removed, and the backup still contains the unscrubbed
+# history. Committing either would put back exactly what the scrub took out.
+relay-scrub-replacements.txt
+relay-backup.git/
 
 # python
 __pycache__/

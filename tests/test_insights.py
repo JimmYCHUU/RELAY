@@ -17,7 +17,7 @@ from relay.ingest.insights import build_index, parse_insights, resolve_headers
 from relay.matching.permalink import (is_share_link, normalize_fb_url,
                                       page_slug, post_token)
 from relay.models import CellValue, ReportRow, RunResult
-from relay.resolve.insights_fill import fill_from_insights, fit_k_table
+from relay.resolve.insights_fill import cell_from_insights, fill_from_insights
 
 PAGE = "https://www.facebook.com/somoysongbad360/posts/"
 HEADER = ('"Post ID","Page ID","Page name",Title,"Publish time",Permalink,'
@@ -77,6 +77,26 @@ def test_post_token_and_page_slug():
         == "1614564286704364"
     assert page_slug(f"{PAGE}pfbid0AAA") == "somoysongbad360"
     assert post_token("https://www.facebook.com/share/p/18UYFuW8xo/") is None
+
+
+def test_photo_lightbox_links_are_parsed():
+    """The desktop lightbox names its page only in `set=pb.<page-id>`."""
+    pb = ("https://www.facebook.com/photo/?fbid=1547624310731465"
+          "&set=pb.100064517327464.-2207520000")
+    assert page_slug(pb) == "100064517327464"
+    assert post_token(pb) == "1547624310731465"
+    # an album says nothing about which page owns it
+    album = "https://www.facebook.com/photo/?fbid=1560894569404439&set=a.626062159554356"
+    assert page_slug(album) is None
+    assert post_token(album) == "1560894569404439"
+
+
+def test_page_slug_never_mistakes_a_post_id_for_a_page():
+    """The page is always the first path segment. A URL that opens with route
+    furniture names no page, and must not hand back the post id that follows —
+    that would scope the caption fallback to a page that does not exist."""
+    assert page_slug("https://www.facebook.com/permalink.php?story_fbid=123456789") is None
+    assert page_slug("https://www.facebook.com/photo/?fbid=1560894569404439") is None
 
 
 def test_is_share_link():
@@ -188,15 +208,6 @@ def test_metric_switch(tmp_path):
     assert run.rows[0].cells["fb1"].value == 564
 
 
-def test_fill_never_overwrites_the_supervisor_value(tmp_path):
-    """The supervisor matched file stays primary — that is the user's rule."""
-    index = build_index([_csv(tmp_path, ROWS)])
-    cells = {s: CellValue.missing() for s in ("fb1", "fb2", "fb3", "x", "ig")}
-    cells["fb1"] = CellValue(111111, "matched", 1.0)
-    run = _run({"fb1": f"{PAGE}pfbid0AAA"}, cells)
-    assert fill_from_insights(run, index) == 0
-    assert run.rows[0].cells["fb1"].value == 111111
-
 
 def test_share_links_wait_for_a_resolver(tmp_path):
     index = build_index([_csv(tmp_path, ROWS)])
@@ -251,27 +262,6 @@ def test_short_captions_never_fuzzy_match(tmp_path):
     assert fill_from_insights(run, index) == 0
 
 
-# --- fitting k from real data ---
-
-def test_fit_k_table_tracks_the_real_curve(tmp_path):
-    rows = "".join(
-        f'{i},9,"P","t","07/03/2026 10:00",{PAGE}pfbid0N{i},0,Photos,'
-        f'{reactions * 400},{reactions * 300},1,{reactions},0\n'
-        for i, reactions in enumerate([2] * 20 + [700] * 20)
-    )
-    table = fit_k_table(build_index([_csv(tmp_path, rows)]), metric="reach")
-    assert table[(1, 4)] == pytest.approx(300, abs=1)
-    assert table[(500, 10**9)] == pytest.approx(300, abs=1)
-    # buckets without enough samples are omitted, so callers fall back
-    assert (50, 99) not in table
-
-
-def test_fit_k_table_ignores_zero_reaction_posts(tmp_path):
-    rows = "".join(
-        f'{i},9,"P","t","07/03/2026 10:00",{PAGE}pfbid0Z{i},0,Photos,500,400,0,0,0\n'
-        for i in range(20))
-    assert fit_k_table(build_index([_csv(tmp_path, rows)])) == {}
-
 
 # --- against the real export, when it is present ---
 
@@ -292,85 +282,335 @@ def test_real_export_permalinks_are_unique_keys():
     assert len(index.by_token) == 1820
 
 
-@pytest.mark.skipif(not INSIGHTS_EXPORT.exists(), reason="real export not present")
-def test_real_export_fits_k_far_above_the_flat_range():
-    """The measurement that justified replacing the heuristic: the true ratio
-    sits well outside 70-120 for ordinary posts, and falls as engagement rises."""
-    table = fit_k_table(build_index([INSIGHTS_EXPORT]), metric="reach")
-    assert table[(1, 4)] > config.K_MAX * 2
-    assert table[(1, 4)] > table[(500, 10**9)]
+# --- campaign links that name no page ---
+#
+# Facebook's own "Copy link" buttons hand out two shapes the export never uses:
+# the mobile share sheet's `/share/p/<short>/` and the desktop lightbox's
+# `/photo/?fbid=…&set=…`. Neither carries the page in its path, so the caption
+# fallback has nothing to scope against and these cells used to come back empty
+# even when the export plainly held the post — the June bKash sheet opens with
+# four such rows.
 
+MAIN = "https://www.facebook.com/somoynews.tv/posts/"
+SPORT = "https://www.facebook.com/somoytvsports/posts/"
+STORY = "২০২৬ ফুটবল বিশ্বকাপ সামনে রেখে যুক্তরাষ্ট্রে পৌঁছেছে ব্রাজিল জাতীয় ফুটবল দল"
+JUNE3 = datetime(2026, 6, 3)
 
-# --- slot correction (the supervisor's Views_Match_N order is not Link 2/3 order) ---
-
-P2 = "https://www.facebook.com/somoysongbad360/posts/"
-P3 = "https://www.facebook.com/somoytvsports/posts/"
-
-TWO_PAGES = (
-    f'2001,900,"সময় সংবাদ","একই ক্যাপশন দুই পেজে প্রকাশিত হয়েছে আজ",'
-    f'"07/03/2026 10:00",{P2}pfbid0S1,0,Photos,6778,4775,9,5,1\n'
-    f'2002,901,"Somoy Sports","একই ক্যাপশন দুই পেজে প্রকাশিত হয়েছে আজ",'
-    f'"07/03/2026 10:05",{P3}pfbid0S2,0,Photos,9562,6350,9,7,1\n'
+# the same story as both pages ran it, exactly as the real export carries it
+TWO_PAGE_STORY = (
+    f'2001,100064517327464,"somoynews.tv","{STORY}","06/03/2026 10:00",'
+    f'{MAIN}pfbid0EXPORTA,0,Photos,99818,70000,50,40,5\n'
+    f'2002,61550125032197,"Somoy Sports","{STORY}","06/03/2026 10:05",'
+    f'{SPORT}pfbid0EXPORTB,0,Photos,6542,5000,20,15,2\n'
 )
-CAPTION = "একই ক্যাপশন দুই পেজে প্রকাশিত হয়েছে আজ"
 
 
-def _two_slot_run(v2, v3):
-    """A row whose FB2/FB3 both carry a supervisor-matched value."""
-    from datetime import datetime
-    cells = {s: CellValue.missing() for s in ("fb1", "fb2", "fb3", "x", "ig")}
-    cells["fb2"] = CellValue(v2, "matched", 1.0)
-    cells["fb3"] = CellValue(v3, "matched", 1.0)
-    run = _run({"fb2": f"{P2}pfbid0SHEET2", "fb3": f"{P3}pfbid0SHEET3"},
-               cells, caption=CAPTION, date=datetime(2026, 7, 3))
-    return run
+def _sheet(rows):
+    """A RunResult of several campaign rows — page inference reads the slot's
+    page distribution off the whole sheet, so one row is never enough."""
+    out = []
+    for i, (links, caption, date) in enumerate(rows, start=1):
+        out.append(ReportRow(
+            no=i, date=date, caption=caption,
+            links={"fb1": links.get("fb1"), "fb2": links.get("fb2"),
+                   "fb3": links.get("fb3"), "x": None, "ig": None},
+            cells={s: CellValue.missing() for s in ("fb1", "fb2", "fb3", "x", "ig")},
+        ))
+    return RunResult(brand="B", month="June", rows=out)
 
 
-def test_swapped_slots_are_corrected(tmp_path):
-    """Measured on a real month: a sizeable share of filled FB cells carried a
-    different page's number, because Views_Match_1 is not always the subpage."""
-    from relay.resolve.insights_fill import reassign_subpage_slots
-    index = build_index([_csv(tmp_path, TWO_PAGES)])
-
-    run = _two_slot_run(9562, 6778)          # supervisor order is backwards
-    assert reassign_subpage_slots(run, index, metric="views") == 2
-    assert run.rows[0].cells["fb2"].value == 6778   # somoysongbad360
-    assert run.rows[0].cells["fb3"].value == 9562   # somoytvsports
-    assert "slot corrected from FB3" in run.rows[0].cells["fb2"].note
+def _sheet_with(first_row_links, filler_fb2=SPORT):
+    """`first_row_links` under three ordinary rows that establish the habit:
+    Link 1 is the main page, Link 2 a subpage."""
+    rows = [(first_row_links, STORY, JUNE3)]
+    for i in range(3):
+        rows.append(({"fb1": f"{MAIN}pfbid0F{i}", "fb2": f"{filler_fb2}pfbid0G{i}"},
+                     "অন্য একটি খবর যার সঙ্গে এই গল্পের কোনো সম্পর্ক নেই", JUNE3))
+    return _sheet(rows)
 
 
-def test_correct_order_is_left_alone(tmp_path):
-    from relay.resolve.insights_fill import reassign_subpage_slots
-    index = build_index([_csv(tmp_path, TWO_PAGES)])
-    run = _two_slot_run(6778, 9562)
-    assert reassign_subpage_slots(run, index, metric="views") == 0
-    assert run.rows[0].cells["fb2"].note == ""
+def test_share_link_page_is_inferred_from_the_slots_other_links(tmp_path):
+    """The June bKash rows 1-4 case: both links are share links, the caption is
+    in the export twice — once per page — and the slot each link sits in says
+    which is which."""
+    index = build_index([_csv(tmp_path, TWO_PAGE_STORY)])
+    run = _sheet_with({"fb1": "https://www.facebook.com/share/p/14i5461RWUo/",
+                       "fb2": "https://www.facebook.com/share/p/1Khk1YURtN/"})
+
+    assert fill_from_insights(run, index, metric="views") == 2
+    row = run.rows[0]
+    assert row.cells["fb1"].value == 99818, "Link 1 is the main page"
+    assert row.cells["fb2"].value == 6542, "Link 2 is the subpage"
+    assert "page inferred as somoynews.tv" in row.cells["fb1"].note
+    assert row.cells["fb1"].confidence <= 0.9, "never as good as a link that named its page"
 
 
-def test_reassignment_never_invents_or_loses_a_number(tmp_path):
-    """It permutes the supervisor's own values; the row total cannot move."""
-    from relay.resolve.insights_fill import reassign_subpage_slots
-    index = build_index([_csv(tmp_path, TWO_PAGES)])
-    run = _two_slot_run(9562, 6778)
-    before = sorted(c.value for c in run.rows[0].cells.values() if c.value)
-    reassign_subpage_slots(run, index, metric="views")
-    after = sorted(c.value for c in run.rows[0].cells.values() if c.value)
-    assert before == after
+def test_photo_lightbox_link_resolves_its_page_by_id(tmp_path):
+    """`set=pb.<page-id>` names the page numerically; the export carries both
+    that id and the vanity slug, so this one needs no guessing at all."""
+    index = build_index([_csv(tmp_path, TWO_PAGE_STORY)])
+    photo = ("https://www.facebook.com/photo/?fbid=1547624310731465"
+             "&set=pb.100064517327464.-2207520000")
+    run = _sheet_with({"fb1": photo})
+
+    assert fill_from_insights(run, index, metric="views") == 1
+    cell = run.rows[0].cells["fb1"]
+    assert cell.value == 99818
+    assert "matched by caption" in cell.note and "inferred" not in cell.note
 
 
-def test_reassignment_needs_two_identifiable_posts(tmp_path):
-    """With only one slot identifiable there is nothing to arbitrate."""
-    from relay.resolve.insights_fill import reassign_subpage_slots
-    one = TWO_PAGES.split("\n")[0] + "\n"
-    index = build_index([_csv(tmp_path, one)])
-    run = _two_slot_run(9562, 6778)
-    assert reassign_subpage_slots(run, index, metric="views") == 0
+def test_album_photo_link_falls_back_to_inference(tmp_path):
+    """`set=a.<album-id>` names only an album, which the export knows nothing
+    about — so this shape does go through the slot's page distribution."""
+    index = build_index([_csv(tmp_path, TWO_PAGE_STORY)])
+    run = _sheet_with({"fb1": "https://www.facebook.com/photo/?fbid=15476243&set=a.626062159554356"})
+
+    assert fill_from_insights(run, index, metric="views") == 1
+    assert run.rows[0].cells["fb1"].value == 99818
+    assert "page inferred" in run.rows[0].cells["fb1"].note
 
 
-def test_reassignment_only_touches_supervisor_values(tmp_path):
-    """A collected or manually entered value is already authoritative."""
-    from relay.resolve.insights_fill import reassign_subpage_slots
-    index = build_index([_csv(tmp_path, TWO_PAGES)])
-    run = _two_slot_run(9562, 6778)
-    run.rows[0].cells["fb3"] = CellValue(6778, "manual", 1.0, "typed in")
-    assert reassign_subpage_slots(run, index, metric="views") == 0
+def test_inference_declines_when_the_sheet_gives_no_clear_page(tmp_path):
+    """Both pages ran the story and this slot points at both about equally
+    often, so there is no reason to prefer one. A blank beats a coin flip."""
+    index = build_index([_csv(tmp_path, TWO_PAGE_STORY)])
+    rows = [({"fb2": "https://www.facebook.com/share/p/14i5461RWUo/"}, STORY, JUNE3)]
+    for i in range(3):
+        rows.append(({"fb2": f"{MAIN}pfbid0H{i}"}, "ভিন্ন খবর এক নম্বর যা মেলে না", JUNE3))
+        rows.append(({"fb2": f"{SPORT}pfbid0I{i}"}, "ভিন্ন খবর দুই নম্বর যা মেলে না", JUNE3))
+    run = _sheet(rows)
+
+    assert fill_from_insights(run, index, metric="views") == 0
+    assert run.rows[0].cells["fb2"].value is None
+    assert any("no clear page" in i.reason for i in run.issues)
+
+
+def test_a_pageless_link_records_why_it_stayed_empty(tmp_path):
+    index = build_index([_csv(tmp_path, TWO_PAGE_STORY)])
+    run = _sheet_with({"fb1": "https://www.facebook.com/share/p/14i5461RWUo/"})
+    run.rows[0].caption = "সম্পূর্ণ ভিন্ন একটি খবর যা রপ্তানিতে নেই"
+
+    assert fill_from_insights(run, index, metric="views") == 0
+    assert any("no export row matches this caption" in i.reason for i in run.issues)
+
+
+def test_inference_never_puts_two_slots_on_one_page(tmp_path):
+    """One post per page per row: a page already accounted for by a link that
+    named itself is not available to a page-less one."""
+    index = build_index([_csv(tmp_path, TWO_PAGE_STORY)])
+    run = _sheet_with({"fb1": f"{MAIN}pfbid0SHEETSIDE",
+                       "fb2": "https://www.facebook.com/share/p/1Khk1YURtN/"})
+
+    assert fill_from_insights(run, index, metric="views") == 2
+    assert run.rows[0].cells["fb1"].value == 99818
+    assert run.rows[0].cells["fb2"].value == 6542, "main page was already taken"
+
+
+# --- the export's own boilerplate tail ---
+
+BUDGET = "দাম কমতে পারে যেসব পণ্যের এবারের বাজেট প্রস্তাবে"
+GOLD = ("দেশের বাজারে স্বর্ণের দাম আরেক দফা বাড়ানোর সিদ্ধান্ত নিয়েছে "
+        "বাংলাদেশ জুয়েলার্স অ্যাসোসিয়েশন")
+
+BOILERPLATE_ROWS = (
+    f'3001,900,"সময় সংবাদ","{BUDGET}...\n\nবিস্তারিত কমেন্টে…\n\n#somoytv #NewsUpdate",'
+    f'"06/03/2026 10:00",{PAGE}pfbid0BUDGET,0,Photos,182392,120000,90,70,9\n'
+    # the same day's gold story, but it says prices were CUT where the campaign
+    # sheet says RAISED — one word apart, and a different post
+    f'3002,900,"সময় সংবাদ","দেশের বাজারে আরেক দফা স্বর্ণের দাম কমানোর সিদ্ধান্ত '
+    f'নিয়েছে বাংলাদেশ জুয়েলার্স অ্যাসোসিয়েশন। এবার ভরিতে...\n\nবিস্তারিত কমেন্টে…\n\n#gold",'
+    f'"06/03/2026 11:00",{PAGE}pfbid0GOLD,0,Photos,637905,400000,300,250,30\n'
+)
+
+
+def test_the_exports_call_to_action_tail_no_longer_blocks_a_match(tmp_path):
+    """83% of a real month's export titles end in "বিস্তারিত কমেন্টে…" plus a
+    hashtag block that no campaign sheet carries. Those extra tokens dragged
+    token_set_ratio to 0.88 — under the bar — on captions that were otherwise
+    word-for-word identical."""
+    index = build_index([_csv(tmp_path, BOILERPLATE_ROWS)])
+    run = _sheet([({"fb1": f"{PAGE}pfbid0MISSING"}, BUDGET, JUNE3)])
+
+    assert fill_from_insights(run, index, metric="views") == 1
+    assert run.rows[0].cells["fb1"].value == 182392
+
+
+def test_stripping_the_tail_never_rescues_a_reversed_headline(tmp_path):
+    """Stripping shortens the token set, and a short set stops noticing the one
+    word that flips the meaning — বাড়ানোর (raised) against কমানোর (cut) scores
+    0.93. Hence the far stricter bar for the stripped key: this must stay empty."""
+    index = build_index([_csv(tmp_path, BOILERPLATE_ROWS)])
+    run = _sheet([({"fb1": f"{PAGE}pfbid0MISSING"}, GOLD, JUNE3)])
+
+    assert fill_from_insights(run, index, metric="views") == 0
+
+
+def test_a_page_running_one_story_twice_is_refused_not_ranked(tmp_path):
+    """Somoy re-posts a story minutes after the first attempt and both copies
+    carry the same caption on the same page. Nothing in the caption separates
+    them, and measured on a real April both orderings put wrong numbers in the
+    report — one picked a 678-view duplicate where the live post had 6,519. So
+    the caption join refuses the slot and the post-id pass settles it."""
+    caption = "একই শিরোনামে দুইবার প্রকাশিত একটি খবরের প্রতিবেদন"
+    rows = (
+        f'4001,900,"সময় সংবাদ","{caption}","06/03/2026 10:00",{PAGE}pfbid0OLD,'
+        '0,Photos,1111,900,10,8,1\n'
+        f'4002,900,"সময় সংবাদ","{caption}","06/04/2026 10:00",{PAGE}pfbid0NEW,'
+        '0,Photos,2222,1800,10,8,1\n'
+    )
+    index = build_index([_csv(tmp_path, rows)])
+    run = _sheet([({"fb1": f"{PAGE}pfbid0MISSING"}, caption, datetime(2026, 6, 4))])
+
+    assert fill_from_insights(run, index, metric="views") == 0
+    assert run.rows[0].cells["fb1"].value is None
+    assert any("same story twice" in i.reason for i in run.issues)
+
+
+# --- a figure has to explain itself ---
+#
+# A user auditing the June report could not account for a 40,144 on a shared
+# post: the export's pfbid differs from the sheet's link, and that export row
+# carries a blank Title, so searching their own copy by link *or* by caption
+# found nothing. The figure was right — it had been joined on Meta's numeric post
+# id after the collector read it off the post page — but the note said only
+# "insights export <file> · post <id> · Views", which named no method and cited a
+# filename carrying RELAY's internal upload prefix.
+
+def test_note_names_the_line_of_the_file_and_how_it_was_joined(tmp_path):
+    index = build_index([_csv(tmp_path, ROWS)])
+    cell = cell_from_insights(index.lookup(f"{PAGE}pfbid0AAA"), "views",
+                              how="matched by the sheet's own link")
+    assert "export.csv row 2" in cell.note, "the exact CSV line, not just the file"
+    assert "post 1001" in cell.note
+    assert "matched by the sheet's own link" in cell.note
+    assert "5 reactions on the export's copy" in cell.note
+
+
+def test_a_blank_title_row_says_why_a_caption_search_would_fail(tmp_path):
+    """10.7% of a real month's export rows carry no Title, most of them shares.
+    For those, a reader searching their copy by caption finds nothing — so the
+    note has to say the export never had one."""
+    rows = (f'2001,900,"সময় সংবাদ","","07/03/2026 10:00",{PAGE}pfbid0SHARED,'
+            '1,Photos,40144,28161,90,85,3\n')
+    index = build_index([_csv(tmp_path, rows)])
+    cell = cell_from_insights(index.rows[0], "views", how="identified by post id")
+    assert "shared post — the export carries no caption for it" in cell.note
+    assert "85 reactions on the export's copy" in cell.note
+
+
+def test_the_note_cites_the_filename_the_client_was_handed(tmp_path):
+    """Dashboard uploads are stored under a random prefix. A note citing
+    '48bcbfb9_combine.csv' points at a name that exists nowhere but RELAY."""
+    from relay.ingest.insights import display_name
+
+    index = build_index([_csv(tmp_path, ROWS, name="48bcbfb9_combine.csv")])
+    cell = cell_from_insights(index.rows[0], "views")
+    assert "insights export combine.csv row" in cell.note
+    assert "48bcbfb9" not in cell.note
+    # an unprefixed name is left alone, and so is something merely prefix-shaped
+    assert display_name("combine.csv") == "combine.csv"
+    assert display_name("Jun-01-2026_Jun-07-2026_1697572464799951.csv") == \
+        "Jun-01-2026_Jun-07-2026_1697572464799951.csv"
+
+
+def test_every_export_fill_states_its_method(tmp_path):
+    """The four join paths must be distinguishable from the cell alone — that is
+    the whole point. Reading them out of the progress log is not enough: the log
+    is trimmed to the last 40 lines and never persisted."""
+    index = build_index([_csv(tmp_path, ROWS)])
+    caption = "দ্বিতীয় পোস্ট, লাইন এক\n\nলাইন দুই"
+
+    run = _run({"fb1": f"{PAGE}pfbid0AAA"})
+    fill_from_insights(run, index, metric="views")
+    assert "matched by the sheet's own link" in run.rows[0].cells["fb1"].note
+
+    run = _run({"fb1": f"{PAGE}pfbid0MISSING"}, caption=caption,
+               date=datetime(2026, 7, 4))
+    fill_from_insights(run, index, metric="views")
+    assert "matched by caption" in run.rows[0].cells["fb1"].note
+
+
+# --- Instagram ---
+#
+# The mirror image of Facebook. A `pfbid` differs between a copied link and the
+# export, which is why Facebook needs a browser visit to read a post id. An
+# Instagram shortcode is the same string in both, so the join is exact and
+# offline — and the export's own columns say "Likes" and "Account name" where
+# Facebook's say "Reactions" and "Page name".
+
+IG_HEADER = ('"Post ID","Account ID","Account username","Account name",Description,'
+             '"Duration (sec)","Publish time",Permalink,"Post type","Data comment",'
+             'Date,Views,Reach,Likes,Shares,Follows,Comments,Saves\n')
+IG_ROWS = (
+    '18098311940237254,17841405640718718,somoynews_tv,"SOMOY TV","প্রথম পোস্ট",0,'
+    '"06/29/2026 15:21",https://www.instagram.com/p/DaL7buhEzbR/,"IG image",,'
+    'Lifetime,87275,47106,3478,504,2,59,44\n'
+    '18098311940237255,17841405640718718,somoynews_tv,"SOMOY TV","দ্বিতীয় পোস্ট",0,'
+    '"06/30/2026 11:00",https://www.instagram.com/reel/DaXyz12AbCd/,"IG reel",,'
+    'Lifetime,4570,3000,62,10,0,3,2\n'
+)
+
+
+def test_instagram_export_columns_resolve(tmp_path):
+    """Its headers differ from Facebook's for the same fields; one alias table
+    has to cover both without "Likes" ever displacing "Likes and reactions"."""
+    export = parse_insights(_csv(tmp_path, IG_ROWS, header=IG_HEADER, name="ig.csv"))
+    row = export.rows[0]
+    assert row.views == 87275 and row.reach == 47106
+    assert row.reactions == 3478, "Likes is the Instagram spelling of reactions"
+    assert row.page_name == "SOMOY TV" and row.title == "প্রথম পোস্ট"
+    assert row.post_id == "18098311940237254"
+
+
+@pytest.mark.parametrize("url,code", [
+    ("https://www.instagram.com/p/DaL7buhEzbR/", "DaL7buhEzbR"),
+    # the app's copy-link button appends tracking the export never carries
+    ("https://www.instagram.com/p/DZKgM89kyqP/?utm_source=ig_web_copy_link&i=1",
+     "DZKgM89kyqP"),
+    ("https://www.instagram.com/reel/DaXyz12AbCd/", "DaXyz12AbCd"),
+    ("https://www.instagram.com/somoynews_tv/reel/DaXyz12AbCd/", "DaXyz12AbCd"),
+    ("https://www.facebook.com/somoynews.tv/posts/pfbid0AAA", None),
+    (None, None),
+])
+def test_ig_shortcode(url, code):
+    from relay.matching.permalink import ig_shortcode
+    assert ig_shortcode(url) == code
+
+
+def test_instagram_cells_fill_from_the_export_without_a_browser(tmp_path):
+    from relay.resolve.insights_fill import fill_instagram_from_insights
+
+    index = build_index([_csv(tmp_path, IG_ROWS, header=IG_HEADER, name="ig.csv")])
+    run = _sheet([({}, "যেকোনো একটি ক্যাপশন যা কোথাও মেলে না", datetime(2026, 6, 29))])
+    run.rows[0].links["ig"] = \
+        "https://www.instagram.com/p/DaL7buhEzbR/?utm_source=ig_web_copy_link"
+
+    assert fill_instagram_from_insights(run, index, metric="views") == 1
+    cell = run.rows[0].cells["ig"]
+    assert cell.value == 87275 and cell.provenance == "collected"
+    assert "matched by the post's shortcode" in cell.note
+    assert "ig.csv row 2" in cell.note
+
+
+def test_an_instagram_link_absent_from_the_export_stays_empty(tmp_path):
+    from relay.resolve.insights_fill import fill_instagram_from_insights
+
+    index = build_index([_csv(tmp_path, IG_ROWS, header=IG_HEADER, name="ig.csv")])
+    run = _sheet([({}, "ক্যাপশন", datetime(2026, 6, 29))])
+    run.rows[0].links["ig"] = "https://www.instagram.com/p/NOTINEXPORT/"
+
+    assert fill_instagram_from_insights(run, index) == 0
+    assert run.rows[0].cells["ig"].value is None
+
+
+def test_one_index_serves_both_exports(tmp_path):
+    """Facebook and Instagram files are loaded into a single index; each join
+    keys on the identifier its own platform actually carries."""
+    index = build_index([_csv(tmp_path, ROWS),
+                         _csv(tmp_path, IG_ROWS, header=IG_HEADER, name="ig.csv")])
+    assert len(index) == 5
+    assert index.lookup(f"{PAGE}pfbid0AAA").post_id == "1001"
+    assert index.lookup_ig("https://www.instagram.com/p/DaL7buhEzbR/").views == 87275
+    # neither join answers for the other platform's URLs
+    assert index.lookup_ig(f"{PAGE}pfbid0AAA") is None
+    assert index.lookup("https://www.instagram.com/p/DaL7buhEzbR/") is None

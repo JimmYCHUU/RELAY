@@ -3,26 +3,33 @@
 Layout (columns, footer formulas, merges) still mirrors the hand-made
 the client's own hand-made report as ground truth; the visual layer is the
 modern style the analyst approved from `style-samples/style-3-modern-theme.xlsx`.
-The accent color follows the brand: it is detected from the campaign sheet's
-fills, with the theme's teal as the fallback for colorless sheets.
+The palette is fixed. It was derived from the campaign sheet's own fills for a
+while, but a campaign sheet's strongest colour is whatever someone highlighted a
+cell with — on the June sheets that read as plain yellow (FFFF00) and produced an
+olive masthead. The sample's teal is the approved look, so it is simply the look.
+
+Nothing in the delivered file explains how RELAY works: no cell comments, no
+provenance, no notes. The dashboard is where a figure is audited; this workbook
+is what goes to the sponsor.
 """
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 
 import openpyxl
-from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from ..models import RunResult
 
-ACCENT_FALLBACK = "0C8F7C"          # the approved sample's teal
+# style-3's exact palette. The tint and band are the sample's own hand-picked
+# values, not a formula's output — mixing the accent toward white lands a few
+# points off on both.
+ACCENT = "0C8F7C"
+TINT = "E7F5F2"
+BAND = "F5F8F7"
 INK = "FF1F2937"
 LINK_BLUE = "FF1155CC"
-# colors that appear in campaign sheets but are not brand identity
-_NON_BRAND = {"0000FF", "1155CC", "FF0000"}
 
 COL_WIDTHS = {
     "A": 16.7, "B": 21.7, "C": 31.3, "D": 32.1, "E": 21.0, "F": 27.0, "G": 27.6,
@@ -38,74 +45,6 @@ SLOT_COLS = {"fb1": (4, 5), "fb2": (6, 7), "fb3": (8, 9), "x": (10, 11), "ig": (
 VALUE_COLS = (5, 7, 9, 11, 13)
 DATE_FMT = "d\\ mmm"
 NUM_FMT = "#,##0"
-
-
-# ── brand accent ──────────────────────────────────────────────────────────────
-def _rgb(hexs: str) -> tuple[int, ...]:
-    return tuple(int(hexs[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def _hex(rgb) -> str:
-    return "".join(f"{max(0, min(255, round(v))):02X}" for v in rgb)
-
-
-def _luminance(rgb) -> float:
-    def ch(v):
-        v /= 255
-        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
-    r, g, b = (ch(v) for v in rgb)
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def _contrast(a, b) -> float:
-    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
-    return (la + 0.05) / (lb + 0.05)
-
-
-def _mix(rgb, other, t):
-    return tuple(a + (b - a) * t for a, b in zip(rgb, other))
-
-
-def detect_brand_accent(campaign_path: str | Path, max_rows: int = 200) -> str | None:
-    """Dominant saturated fill color across the campaign workbook's sheets —
-    brand sheets usually carry the brand's tone. Grays/whites and the standard
-    link-blue / warning-red fonts' hexes are ignored; None when nothing
-    qualifies (e.g. sheets that are pure gray)."""
-    try:
-        wb = openpyxl.load_workbook(campaign_path, read_only=False)
-    except Exception:
-        return None
-    counts: Counter[str] = Counter()
-    try:
-        for ws in wb.worksheets:
-            for row in ws.iter_rows(min_row=1, max_row=max_rows):
-                for c in row:
-                    f = c.fill
-                    if not f or f.fill_type != "solid" or f.fgColor.type != "rgb":
-                        continue
-                    rgb = (f.fgColor.rgb or "")[-6:].upper()
-                    if len(rgb) != 6 or rgb in _NON_BRAND:
-                        continue
-                    channels = _rgb(rgb)
-                    if max(channels) - min(channels) < 30:   # gray/white/black
-                        continue
-                    counts[rgb] += 1
-    finally:
-        wb.close()
-    return counts.most_common(1)[0][0] if counts else None
-
-
-def derive_palette(accent_hex: str) -> dict[str, str]:
-    """Accent -> masthead/tint/banding hexes; the accent is darkened until
-    large white text reads on it (WCAG large-text 3:1)."""
-    acc = _rgb(accent_hex)
-    while _contrast(acc, (255, 255, 255)) < 3.0:
-        acc = _mix(acc, (0, 0, 0), 0.12)
-    return {
-        "acc": _hex(acc),
-        "tint": _hex(_mix(acc, (255, 255, 255), 0.90)),
-        "band": _hex(_mix(acc, (255, 255, 255), 0.96)),
-    }
 
 
 # ── writer ────────────────────────────────────────────────────────────────────
@@ -128,27 +67,21 @@ def build_report(
     result: RunResult,
     out_path: str | Path,
     sheet_name: str | None = None,
-    estimate_comments: bool = True,
-    campaign_path: str | Path | None = None,
-    accent: str | None = None,
 ) -> Path:
-    accent = accent or (campaign_path and detect_brand_accent(campaign_path)) \
-        or ACCENT_FALLBACK
-    pal = derive_palette(accent)
-    fill_acc = PatternFill("solid", fgColor="FF" + pal["acc"])
-    fill_tint = PatternFill("solid", fgColor="FF" + pal["tint"])
-    fill_band = PatternFill("solid", fgColor="FF" + pal["band"])
+    fill_acc = PatternFill("solid", fgColor="FF" + ACCENT)
+    fill_tint = PatternFill("solid", fgColor="FF" + TINT)
+    fill_band = PatternFill("solid", fgColor="FF" + BAND)
     lgray = Side(style="thin", color="FFD5DDDA")
     border = Border(left=lgray, right=lgray, top=lgray, bottom=lgray)
     header_border = Border(left=lgray, right=lgray, top=lgray,
-                           bottom=Side(style="medium", color="FF" + pal["acc"]))
+                           bottom=Side(style="medium", color="FF" + ACCENT))
     no_border = Border()
     f_banner = Font(name="Arial", size=38, bold=True, color="FFFFFFFF")
     f_header = Font(name="Arial", size=12, bold=True, color=INK)
     f_data = Font(name="Arial", size=12, bold=True, color="FF111111")
     f_caption = Font(name="Arial", size=11, color=INK)
     f_link = Font(name="Arial", size=9, color=LINK_BLUE, underline="single")
-    f_sum = Font(name="Arial", size=12, bold=True, color="FF" + pal["acc"])
+    f_sum = Font(name="Arial", size=12, bold=True, color="FF" + ACCENT)
     f_foot = Font(name="Arial", size=16, bold=True, color="FFFFFFFF")
     left = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
@@ -165,7 +98,7 @@ def build_report(
     for col, width in COL_WIDTHS.items():
         ws.column_dimensions[col].width = width
 
-    # banner: BRAND — Month Year on the brand accent
+    # banner: BRAND — Month Year
     year = next((r.date.year for r in result.rows if r.date), None)
     title = f"{result.brand.upper()} — {result.month}" + (f" {year}" if year else "")
     ws.merge_cells("A1:M1")
@@ -202,21 +135,8 @@ def build_report(
                                     fill=band, border=border)
             if link:
                 link_cell.hyperlink = link
-            vcell = _write_cell(ws, excel_row, vc, cell.value, f_data,
-                                fmt=NUM_FMT, fill=band, border=border)
-            if estimate_comments and cell.provenance == "estimated":
-                vcell.comment = Comment(f"RELAY estimate: {cell.note}", "RELAY")
-            elif estimate_comments and cell.provenance == "collected" \
-                    and cell.note.startswith("insights export"):
-                # An exact figure from Meta's own export. The note names the
-                # file and post id so the sponsor can trace the number back to
-                # a row in the export they were handed — the only part of the
-                # report they can independently verify.
-                vcell.comment = Comment(f"RELAY source: {cell.note}", "RELAY")
-            elif estimate_comments and link and cell.value is None and cell.note:
-                # a linked slot with no value is a failed extraction, not an
-                # empty slot — say why, so blank cells aren't ambiguous
-                vcell.comment = Comment(f"RELAY: not collected — {cell.note}", "RELAY")
+            _write_cell(ws, excel_row, vc, cell.value, f_data,
+                        fmt=NUM_FMT, fill=band, border=border)
 
     n = len(result.rows)
     last_data = first_data + n - 1

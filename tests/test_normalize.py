@@ -1,6 +1,7 @@
 import unicodedata
 
-from relay.matching.normalize import is_brand_separator, normalize_caption
+from relay.matching.normalize import (is_brand_separator, normalize_caption,
+                                      strip_boilerplate)
 
 
 def test_nfc_equivalence():
@@ -49,3 +50,16 @@ def test_caption_not_separator():
 
 def test_separator_with_values_is_caption():
     assert not is_brand_separator("Acme", has_values=True)
+
+
+def test_boilerplate_tail_and_hashtags_stripped():
+    """Somoy's own post furniture — 83% of a real month's export titles end in
+    this call to action plus a hashtag block that no campaign sheet carries."""
+    lede = "দাম কমতে পারে যেসব পণ্যের এবারের বাজেট প্রস্তাবে"
+    title = lede + "...\n\nবিস্তারিত কমেন্টে…\n\n#somoytv #NewsUpdate"
+    assert strip_boilerplate(title) == lede
+
+
+def test_stripping_leaves_an_ordinary_caption_alone():
+    caption = "সাফ অনূর্ধ্ব-২০ চ্যাম্পিয়নশিপের সেমিফাইনালে বাংলাদেশ"
+    assert strip_boilerplate(caption) == normalize_caption(caption)

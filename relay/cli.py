@@ -23,24 +23,21 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--campaign", required=True)
     run.add_argument("--sheet", required=True, help="Month tab name, e.g. April")
     run.add_argument("--brand", required=True)
-    run.add_argument("--mainpage")
-    run.add_argument("--subpage")
-    run.add_argument("--insta")
     run.add_argument("--insights", action="append", metavar="EXPORT",
-                     help="Meta Business Suite content export (.csv/.xlsx) — exact "
-                          "Reach/Views per post. Repeat once per page.")
+                     help="Facebook Business Suite content export (.csv/.xlsx) — "
+                          "exact Reach/Views per post. Repeat once per file.")
+    run.add_argument("--ig-insights", action="append", metavar="EXPORT",
+                     help="Instagram content export (.csv/.xlsx). Joined by post "
+                          "shortcode, so it needs no browser session at all.")
     run.add_argument("--out", help="Output .xlsx path")
     run.add_argument("--reference", help="Existing hand-made report to cross-check against")
     run.add_argument("--collect-x", action="store_true",
                      help="Fill X impressions from public post pages (no login)")
-    run.add_argument("--collect-fb", action="store_true",
-                     help="Fill missing FB cells via Meta Business Suite session")
+    run.add_argument("--resolve-fb", action="store_true",
+                     help="Identify every unresolved FB post by its post id via the "
+                          "Meta session, and fill it from the export")
     run.add_argument("--collect-ig", action="store_true",
                      help="Fill missing Instagram cells from post pages (Meta session)")
-    run.add_argument("--k", type=float, default=None,
-                     help=f"Pin the reactions multiplier for estimates "
-                          f"({config.K_MIN:g}-{config.K_MAX:g}); default: fitted from "
-                          f"--insights data when available, else randomized per cell")
     run.add_argument("--dry-run", action="store_true",
                      help="Collectors log intended visits without touching the network")
 
@@ -70,19 +67,18 @@ def main(argv: list[str] | None = None) -> int:
 
     result = run_pipeline(
         args.campaign, args.sheet, args.brand,
-        mainpage_path=args.mainpage, subpage_path=args.subpage, insta_path=args.insta,
-        insights_paths=args.insights,
+        insights_paths=args.insights, ig_insights_paths=args.ig_insights,
     )
-    if args.insights:
+    if args.insights or args.ig_insights:
         index = result.insights
-        n_filled = sum(1 for r in result.rows for s in ("fb1", "fb2", "fb3")
+        n_filled = sum(1 for r in result.rows for s in ("fb1", "fb2", "fb3", "ig")
                        if r.cells[s].provenance == "collected")
-        print(f"insights export: {len(index):,} posts loaded from "
-              f"{len(index.files)} file(s); {n_filled} Facebook cells filled exactly")
-    if args.collect_x or args.collect_fb or args.collect_ig:
+        print(f"insights exports: {len(index):,} posts loaded from "
+              f"{len(index.files)} file(s); {n_filled} cells filled exactly")
+    if args.collect_x or args.resolve_fb or args.collect_ig:
         from . import store
         from .collectors.base import Pacer
-        from .collectors.runner import collect_facebook, collect_instagram, collect_x
+        from .collectors.runner import collect_instagram, collect_x, resolve_facebook
         pacer = Pacer(dry_run=args.dry_run)
         persist = None
         if not args.dry_run:
@@ -100,10 +96,10 @@ def main(argv: list[str] | None = None) -> int:
                 store.update_cell(db_id, row_idx, slot, cell)
         if args.collect_x:
             print(f"X collector filled {collect_x(result, pacer, persist=persist)} cells")
-        if args.collect_fb:
-            print(f"FB collector filled {collect_facebook(result, args.k, pacer, persist=persist)} cells")
+        if args.resolve_fb:
+            print(f"Facebook resolved {resolve_facebook(result, pacer=pacer, persist=persist)} cells")
         if args.collect_ig:
-            print(f"IG collector filled {collect_instagram(result, args.k, pacer, persist=persist)} cells")
+            print(f"IG collector filled {collect_instagram(result, pacer=pacer, persist=persist)} cells")
     cov = result.coverage()
     print(f"{args.brand} {args.sheet}: {len(result.rows)} rows")
     for slot, frac in cov.items():
@@ -112,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ! {issue.file} row {issue.row}: {issue.reason}", file=sys.stderr)
 
     out = Path(args.out) if args.out else config.OUTPUT_DIR / f"{args.brand} ({args.sheet}).xlsx"
-    build_report(result, out, campaign_path=args.campaign)
+    build_report(result, out)
     print(f"report written: {out}")
 
     if args.reference:

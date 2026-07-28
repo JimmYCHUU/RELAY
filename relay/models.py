@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Optional
 
-Provenance = Literal["matched", "estimated", "manual", "collected", "missing"]
-MatchTier = Literal["exact", "prefix", "fuzzy", "review", "none"]
+# "matched" is gone with the supervisor files, "estimated" with the multiplier:
+# a figure is now Meta's own, read off a post, typed in, or absent.
+Provenance = Literal["collected", "manual", "missing"]
 
 # Report value slots, in template column order.
 SLOTS = ("fb1", "fb2", "fb3", "x", "ig")
@@ -33,33 +34,6 @@ class CampaignRow:
     def is_shared(self) -> bool:
         l1 = self.fb_links[0] or ""
         return "/share/" in l1
-
-
-@dataclass
-class MatchedRow:
-    title: str
-    values: list[Optional[int]]            # Views_Match_1..N, in order
-    source_row: int = 0
-
-    @property
-    def nonempty(self) -> list[int]:
-        return [v for v in self.values if v is not None]
-
-
-@dataclass
-class MatchedFile:
-    path: str
-    rows: list[MatchedRow]                                 # captions only
-    sections: dict[str, list[MatchedRow]] = field(default_factory=dict)
-    issues: list[RowIssue] = field(default_factory=list)
-
-    def for_brand(self, brand: str | None) -> list[MatchedRow]:
-        """Rows for a brand section, else all caption rows."""
-        if brand:
-            hit = self.sections.get(brand.strip().lower())
-            if hit:
-                return hit
-        return self.rows
 
 
 @dataclass
@@ -90,13 +64,6 @@ class InsightsRow:
 
 
 @dataclass
-class Match:
-    matched: Optional[MatchedRow]
-    tier: MatchTier
-    confidence: float
-
-
-@dataclass
 class CellValue:
     value: Optional[int]
     provenance: Provenance
@@ -115,6 +82,10 @@ class ReportRow:
     caption: str
     links: dict[str, Optional[str]]        # slot -> url
     cells: dict[str, CellValue]            # slot -> value
+    # The campaign sheet's own text, kept when `resolve.insights_fill.
+    # refresh_caption` replaced `caption` with the one the post actually
+    # carries. Empty for every row the sheet still describes correctly.
+    original_caption: str = ""
 
     def link(self, slot: str) -> Optional[str]:
         return self.links.get(slot)
@@ -126,7 +97,6 @@ class RunResult:
     month: str
     rows: list[ReportRow]
     issues: list[RowIssue] = field(default_factory=list)
-    match_tiers: dict[int, dict[str, str]] = field(default_factory=dict)
     # ingest.insights.InsightsIndex, attached by run_pipeline. Left untyped to
     # keep models.py free of an import cycle (insights.py imports InsightsRow
     # from here). Collectors reuse it to look up shares once resolved.

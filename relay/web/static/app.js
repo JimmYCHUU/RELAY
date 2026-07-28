@@ -14,7 +14,7 @@ const state = {
   reviewMode: "table", // "table" (flat row list, default) | "list" (master-detail)
   selectedRow: null,  // row.no highlighted in the list
   editing: null,      // {rowNo, slot}
-  collecting: { x: false, fb: false, ig: false },  // can run at once — independent browsers
+  collecting: { fb: false, ig: false, x: false },  // can run at once — independent browsers
   autopilot: false,   // hands-free cycle running — excludes the manual collect buttons
   freshCells: new Set(),
 };
@@ -23,6 +23,11 @@ const SLOT_LABELS = { fb1: "FB 1", fb2: "FB 2", fb3: "FB 3", x: "X", ig: "IG" };
 const PLATFORM_LABELS = { fb1: "FB · Main", fb2: "FB · Shongbad", fb3: "FB · Subpage", x: "X / Twitter", ig: "Instagram" };
 const icon = (id) => `<svg class="ic-svg" aria-hidden="true"><use href="#${id}"/></svg>`;
 const capText = (row) => row.caption || "(no caption — see the post)";
+/* The sheet's caption is kept whenever RELAY replaced it with the post's own,
+   so the person reconciling the two can always see what the sheet still says. */
+const capBadge = (row) => row.original_caption
+  ? ` <span class="conf-badge" data-tip="${esc("RELAY read this caption from the live post. The campaign sheet still says: " + row.original_caption)}">updated</span>`
+  : "";
 const fmt = (n) => n == null ? "—" : n.toLocaleString("en-US");
 const fmtShort = (n) => {
   if (n == null) return "—";
@@ -195,10 +200,8 @@ $("#runBtn").addEventListener("click", async () => {
   if (state.files.campaign) stageBrand();  // single-brand flow needs no Add click
   if (!state.pending.length) return;
   const shared = {
-    mainpage: state.files.mainpage?.path ?? null,
-    subpage: state.files.subpage?.path ?? null,
-    insta: state.files.insta?.path ?? null,
     insights: (state.files.insights ?? []).map((f) => f.path),
+    ig_insights: (state.files.ig_insights ?? []).map((f) => f.path),
   };
   const batch = state.pending;
   $("#runBtn").disabled = true;
@@ -261,18 +264,16 @@ function slotSums() {
 
 function matchStats() {
   // verified: clean caption match, scraped real value, or a human-entered one
-  // estimated: recovered via the reactions × k heuristic — always marked ≈
   // missing: still needs review
-  let verified = 0, estimated = 0, missing = 0;
+  let verified = 0, missing = 0;
   for (const row of state.run.rows) {
     for (const [slot, c] of Object.entries(row.cells)) {
       if (!row.links[slot]) continue;
       if (c.value == null) missing += 1;
-      else if (c.provenance === "estimated") estimated += 1;
       else verified += 1;
     }
   }
-  return { verified, estimated, missing, total: verified + estimated + missing };
+  return { verified, missing, total: verified + missing };
 }
 
 function mergedRun() {
@@ -332,7 +333,7 @@ function renderDashboard() {
       kpi(icon("i-eye"), "ic-blue", "Total Views", fmtShort(total), "all platforms, resolved"),
       kpi(icon("i-x"), "ic-navy", "X Impressions", fmtShort(sums.x),
         sums.x ? "real, scraped from X" : "not collected yet"),
-      kpi(icon("i-target"), "ic-green", "Match Rate", `${matchRate}%`, "verified values, no estimates"),
+      kpi(icon("i-target"), "ic-green", "Match Rate", `${matchRate}%`, "exact values from Meta"),
       kpi(icon("i-alert"), "ic-amber", "Needs Review", String(review), review === 1 ? "content row" : "content rows"),
     ].join("");
 
@@ -463,7 +464,6 @@ function renderDonut(ms) {
   const rate = ms.total ? Math.round((ms.verified / ms.total) * 100) : 0;
   const segs = [
     { label: "Matched — verified value", val: ms.verified, color: "var(--good)" },
-    { label: "Estimated — reactions × k", val: ms.estimated, color: "var(--warning)" },
     { label: "Unmatched — needs review", val: ms.missing, color: "var(--critical)" },
   ];
   const C = 2 * Math.PI * 54;
@@ -488,7 +488,6 @@ function renderDonut(ms) {
 function rowStatus(row) {
   const cells = Object.entries(row.cells).filter(([slot]) => row.links[slot]);
   if (cells.some(([, c]) => c.value == null)) return "missing";
-  if (cells.some(([, c]) => c.provenance === "estimated")) return "estimated";
   return "matched";
 }
 
@@ -497,7 +496,7 @@ function renderTopContent() {
     row,
     total: Object.values(row.cells).reduce((a, c) => a + (c.value ?? 0), 0),
   })).sort((a, b) => b.total - a.total).slice(0, 5);
-  const tips = { matched: "all values verified", estimated: "contains an estimate",
+  const tips = { matched: "all values verified",
                  missing: "has unresolved cells" };
   $("#topContent").innerHTML = rows.map((r, i) => {
     const st = rowStatus(r.row);
@@ -601,7 +600,7 @@ function renderReviewRows() {
     return `<tr>
       <td class="num">${row.no}</td>
       <td class="num">${esc(date)}</td>
-      <td class="caption"><span class="cap-text" title="${esc(capText(row))}">${esc(capText(row))}</span></td>
+      <td class="caption"><span class="cap-text" title="${esc(capText(row))}">${esc(capText(row))}</span>${capBadge(row)}</td>
       ${["fb1", "fb2", "fb3", "x", "ig"].map((slot) => cellHtml(row, slot)).join("")}
     </tr>`;
   }).join("");
@@ -618,12 +617,11 @@ function cellHtml(row, slot) {
     ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
   const fresh = state.freshCells.has(`${state.run.run_id}:${row.no}:${slot}`) ? " freshly" : "";
   // the ≈ mark travels with every heuristic value, here and in the workbook
-  const approx = c.provenance === "estimated" ? "≈" : "";
   const val = c.value != null
-    ? `<span class="val${fresh}${approx ? " est" : ""}">${approx}${fmt(c.value)}</span>`
+    ? `<span class="val${fresh}">${fmt(c.value)}</span>`
     : `<span class="noval">missing</span>`;
   return `<td class="num"><span class="cellv">${dot}${val}${conf}
-    <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Estimate or enter manually">✎</button>
+    <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Enter a value manually">✎</button>
   </span></td>`;
 }
 
@@ -673,30 +671,13 @@ function nextMissingCell(fromRowNo, fromSlot) {
   return null;
 }
 
-$$(".tab", dialog).forEach((t) => t.addEventListener("click", () => {
-  $$(".tab", dialog).forEach((x) => x.classList.remove("active"));
-  t.classList.add("active");
-  $$(".tab-pane", dialog).forEach((p) => { p.hidden = p.dataset.pane !== t.dataset.tab; });
-}));
-$("#kSlider").addEventListener("input", () => { $("#kOut").textContent = $("#kSlider").value; });
-
 dialog.addEventListener("close", async () => {
   const wantNext = dialog.returnValue === "apply-next";
   if ((dialog.returnValue !== "apply" && !wantNext) || !state.editing) return;
   const { rowNo, slot } = state.editing;
-  const activeTab = $(".tab.active", dialog).dataset.tab;
-  let url, body;
-  if (activeTab === "estimate") {
-    const reactions = parseInt($("#reactions").value, 10);
-    if (!Number.isFinite(reactions)) return;
-    url = "/api/estimate";
-    body = { run_id: state.run.run_id, row_no: rowNo, slot, reactions, k: +$("#kSlider").value };
-  } else {
-    const value = $("#manualValue").value === "" ? null : parseInt($("#manualValue").value, 10);
-    url = "/api/override";
-    body = { run_id: state.run.run_id, row_no: rowNo, slot, value };
-  }
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const value = $("#manualValue").value === "" ? null : parseInt($("#manualValue").value, 10);
+  const body = { run_id: state.run.run_id, row_no: rowNo, slot, value };
+  const res = await fetch("/api/override", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) { showError(await errText(res)); return; }
   const cell = await res.json();
   const row = state.run.rows.find((r) => r.no === rowNo);
@@ -724,10 +705,10 @@ $("#collectX").addEventListener("click", () => startCollect("x"));
 $("#collectFB").addEventListener("click", () => startCollect("fb"));
 $("#collectIG").addEventListener("click", () => startCollect("ig"));
 
-const COLLECT_BTN = { x: "#collectX", fb: "#collectFB", ig: "#collectIG" };
+const COLLECT_BTN = { fb: "#collectFB", ig: "#collectIG", x: "#collectX" };
 const COLLECT_LABEL = {
   x: "Scraping public X pages (politely paced)…",
-  fb: "Collecting Facebook via your Meta session…",
+  fb: "Identifying each post by its post ID via your Meta session…",
   ig: "Collecting Instagram via your Meta session…",
 };
 function puEls(target) {
@@ -763,8 +744,6 @@ async function startCollect(target) {
   if (!state.runs.length || state.collecting[target] || state.autopilot) return;
   // always the batch endpoint: one browser session and one shared Pacer
   // budget across every brand in the cycle
-  // no k: the server fits the multiplier from the insights export when one is
-  // loaded, else randomizes it within 70–120× per estimated cell
   const body = { run_ids: state.runs.map((r) => r.run_id), target };
   const res = await fetch("/api/collect/batch", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -886,7 +865,7 @@ async function metaSignInThenCollect(target = "fb") {
 }
 
 /* ═════════ autopilot ═════════ */
-const AP_LABELS = { x: "X / Twitter", fb: "Facebook", ig: "Instagram" };
+const AP_LABELS = { fb: "Facebook", ig: "Instagram", x: "X / Twitter" };
 
 $("#autopilotBtn").addEventListener("click", startAutopilot);
 $("#apStop").addEventListener("click", async () => {
@@ -1034,16 +1013,12 @@ function renderReport() {
   const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
   const grand = fbTotal + sums.x + sums.ig;
   const ms = matchStats();
-  const est = r.rows.flatMap((row) => Object.values(row.cells)
-    .filter((c) => c.provenance === "estimated")).length;
-
   $("#reportTiles").innerHTML = [
     tile(`${r.brand} · ${r.month}`, String(r.rows.length), "content rows"),
     tile("Total views", fmt(grand), "all platforms, resolved cells"),
     tile("Facebook", fmt(fbTotal), "links 1–3"),
     tile("Instagram", fmt(sums.ig), "views"),
-    tile("Resolved", `${ms.verified + ms.estimated}/${ms.total}`, est ? `cells · ${est} estimated` : "cells",
-      ms.missing > 0),
+    tile("Resolved", `${ms.verified}/${ms.total}`, "cells", ms.missing > 0),
   ].join("");
 
   const chartRows = [
@@ -1157,9 +1132,8 @@ const SLOT_META = {
   ig:  { icon: "i-camera",   bg: "var(--igc)" },
 };
 const STATUS_CHIP = {
-  matched:   ["pc-matched", "verified"],
-  estimated: ["pc-estimated", "estimated"],
-  missing:   ["pc-missing", "needs review"],
+  matched: ["pc-matched", "verified"],
+  missing: ["pc-missing", "needs review"],
 };
 
 function filteredRows() {
@@ -1191,8 +1165,7 @@ $("#modeTable").addEventListener("click", () => setReviewMode("table"));
 function miniRing(filled, linked, status) {
   const R = 12, C = 2 * Math.PI * R;
   const frac = linked ? filled / linked : 0;
-  const color = status === "matched" ? "var(--good)"
-    : status === "estimated" ? "var(--warning)" : "var(--critical)";
+  const color = status === "matched" ? "var(--good)" : "var(--critical)";
   return `<span class="mini-ring" aria-hidden="true">
     <svg width="30" height="30" viewBox="0 0 30 30">
       <circle r="${R}" cx="15" cy="15" fill="none" stroke="var(--grid)" stroke-width="3"/>
@@ -1270,16 +1243,15 @@ function slotRowHtml(row, slot) {
   const conf = c.value != null && c.confidence < 0.95
     ? `<span class="conf-badge" data-tip="${esc(c.note || "low confidence")}">check</span>` : "";
   const fresh = state.freshCells.has(`${state.run.run_id}:${row.no}:${slot}`) ? " freshly" : "";
-  const approx = c.provenance === "estimated" ? "≈" : "";
   const val = c.value != null
-    ? `<span class="val${fresh}${approx ? " est" : ""}">${approx}${fmt(c.value)}</span>`
+    ? `<span class="val${fresh}">${fmt(c.value)}</span>`
     : `<span class="noval">missing</span>`;
   return `<div class="slot-row">
     <div class="slot-ic" style="background:${meta.bg}"><svg class="ic-svg"><use href="#${meta.icon}"/></svg></div>
     <div class="slot-name"><strong>${esc(name)}</strong>
       <span class="sub">${esc(c.value != null ? c.provenance : "unresolved")}</span></div>
     <div class="slot-val">${dot}${val}${conf}
-      <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Estimate or enter manually">✎ edit</button>
+      <button class="cell-edit" data-row="${row.no}" data-slot="${slot}" title="Enter a value manually">✎ edit</button>
     </div>
     <a class="iconlink" href="${esc(link)}" target="_blank" rel="noopener">
       <svg class="ic-svg"><use href="#i-external"/></svg> post</a>

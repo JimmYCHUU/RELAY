@@ -2,7 +2,7 @@ import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import CAMPAIGN, REPORT_APRIL, WP_INSTA, WP_MAIN, WP_SUB
+from tests.conftest import CAMPAIGN, INSIGHTS_APRIL, REPORT_APRIL
 
 
 @pytest.fixture()
@@ -20,7 +20,7 @@ def client(tmp_path, monkeypatch):
 def run_id(client):
     res = client.post("/api/run", json={
         "campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A",
-        "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA),
+        "insights": [str(INSIGHTS_APRIL)],
     })
     assert res.status_code == 200, res.text
     return res.json()
@@ -38,33 +38,15 @@ def test_run_payload(run_id):
     data = run_id
     assert len(data["rows"]) == 25
     row2 = data["rows"][1]
-    assert row2["cells"]["fb1"]["value"] == 161332
-    assert row2["cells"]["fb1"]["provenance"] == "matched"
-    assert data["coverage"]["fb2"] == 1.0
+    assert row2["cells"]["fb1"]["value"] == 161460
+    assert row2["cells"]["fb1"]["provenance"] == "collected"
+    assert "insights export" in row2["cells"]["fb1"]["note"]
+    assert data["coverage"]["fb2"] > 0.5
 
 
-def test_estimate_and_override(client, run_id):
+def test_override(client, run_id):
     rid = run_id["run_id"]
     # row 1 fb1 is the shared post — estimate it
-    res = client.post("/api/estimate", json={
-        "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 812, "k": 95})
-    assert res.status_code == 200
-    body = res.json()
-    # 812 × 95 = 77140, then the last digit is nudged onto 1/3/7/9
-    assert abs(body["value"] - 77140) < 10 and body["value"] % 10 in (1, 3, 7, 9)
-    assert body["provenance"] == "estimated" and body["confidence"] == 0.5
-    assert body["note"] == "reactions=812, k=95 (pinned)"
-    # omitting k entirely randomizes it within [70, 120]
-    res2 = client.post("/api/estimate", json={
-        "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 812})
-    assert res2.status_code == 200
-    v2 = res2.json()["value"]
-    assert 812 * 70 <= v2 <= 812 * 120 + 9 and v2 % 10 in (1, 3, 7, 9)
-    # k out of bounds rejected
-    bad = client.post("/api/estimate", json={
-        "run_id": rid, "row_no": 1, "slot": "fb1", "reactions": 10, "k": 50})
-    assert bad.status_code == 422
-    # manual override
     res = client.post("/api/override", json={
         "run_id": rid, "row_no": 1, "slot": "fb1", "value": 76436})
     assert res.status_code == 200
@@ -89,8 +71,10 @@ def test_crosscheck_endpoint(client, run_id):
         "run_id": run_id["run_id"], "reference": str(REPORT_APRIL)})
     assert res.status_code == 200
     cc = res.json()
-    assert cc["equal"] >= 70
-    assert cc["accuracy"] > 0.8
+    # The export's figures drift a little from the hand-read ones and put a
+    # row's two subpage values on the pages that earned them, so this is a
+    # smoke test that the endpoint runs — test_e2e.py is the real gate.
+    assert cc["cells"] > 0
 
 
 def test_dashboard_served(client):
@@ -130,16 +114,15 @@ def _april_export(tmp_path):
 def test_run_with_insights_export_fills_cells_exactly(client, tmp_path):
     export, n = _april_export(tmp_path)
 
-    base = {"campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A",
-            "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA)}
+    base = {"campaign": str(CAMPAIGN), "sheet": "April", "brand": "Brand A"}
     before = client.post("/api/run", json=base).json()
     after = client.post("/api/run", json={**base, "insights": [str(export)]}).json()
 
     assert after["insights"]["posts"] == n
     assert after["insights"]["metric"] == "views"
     assert after["insights"]["files"] == ["april_export.csv"]
-    assert after["coverage"]["fb1"] > before["coverage"]["fb1"], \
-        "the export must fill cells the supervisor file left empty"
+    assert before["coverage"]["fb1"] == 0.0, "nothing fills a cell without an export"
+    assert after["coverage"]["fb1"] > 0.0, "the export is the only source there is"
 
     exact = [c for r in after["rows"] for s, c in r["cells"].items()
              if s.startswith("fb") and c["provenance"] == "collected"]

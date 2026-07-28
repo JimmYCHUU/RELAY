@@ -1,9 +1,7 @@
 import pytest
 
 from relay.ingest.campaign import list_sheets, parse_campaign
-from relay.ingest.supervisor import parse_matched
-from tests.conftest import (ALL_MAIN_APRIL, ALL_MAIN_PENDING, ALL_SUB_PENDING, CAMPAIGN,
-                            WP_INSTA, WP_MAIN, WP_SUB, local_value)
+from tests.conftest import CAMPAIGN, local_value
 
 
 def test_april_campaign_rows(april_campaign):
@@ -53,48 +51,10 @@ def test_list_sheets():
     assert "April" in list_sheets(CAMPAIGN)
 
 
-def test_mainpage_layout():
-    mf = parse_matched(WP_MAIN)
-    assert len(mf.rows) == 25
-    assert mf.rows[0].values == []            # empty match (shared post)
-    assert mf.rows[1].values[0] == 161332
 
 
-def test_subpage_layout():
-    mf = parse_matched(WP_SUB)
-    row3 = mf.rows[2]
-    assert row3.values == [38139, 4891, 8705]
 
 
-def test_insta_layout():
-    mf = parse_matched(WP_INSTA)
-    assert mf.rows[0].values[0] == 1764
-    assert mf.rows[2].values[0] == 193173
-
-
-def test_multibrand_sections_april():
-    mf = parse_matched(ALL_MAIN_APRIL)
-    brand = local_value("SECTION_BRAND", "acme")
-    assert brand in mf.sections
-    assert len(mf.sections[brand]) > 0
-    # case-insensitive access through for_brand
-    assert mf.for_brand(brand.upper()) == mf.sections[brand]
-
-
-def test_multibrand_sections_pending():
-    for path in (ALL_MAIN_PENDING, ALL_SUB_PENDING):
-        mf = parse_matched(path)
-        assert mf.sections, f"no sections detected in {path.name}"
-        # separator rows must not appear among caption rows
-        for rows in mf.sections.values():
-            for r in rows:
-                assert len(r.title) > 0
-
-
-def test_wide_files_parse():
-    mf = parse_matched(ALL_SUB_PENDING)
-    widths = [len(r.values) for r in mf.rows]
-    assert max(widths) >= 12
 
 
 def test_category_count_layout(tmp_path):

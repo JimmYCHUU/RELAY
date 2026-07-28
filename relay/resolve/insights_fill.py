@@ -1,12 +1,9 @@
 """Fill unresolved Facebook cells from Meta's own insights export (SRS FR-13a).
 
-Sits between matching and the browser collectors, so the resolution order is:
-
-    supervisor matched file  ->  insights export  ->  reactions x k
-
-The supervisor file stays primary and is never overwritten. The export is
-consulted only for cells it left empty — which is where the reactions estimate
-used to fire, and where it was measured to be wrong for ~92% of posts.
+This is where nearly every figure in a report now comes from. The export is
+consulted before any collector runs, and what it cannot account for is left for
+a post visit rather than estimated — a multiplier was measured wrong for ~92% of
+posts, and a blank cell is worth more to a sponsor than a plausible invention.
 
 The value written is an exact integer from Meta, and its note names the source
 file and post id so the client can trace any figure back to a row in the export
@@ -15,6 +12,7 @@ they were handed.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import timedelta
 from itertools import permutations
 from typing import Callable, Optional
@@ -22,15 +20,15 @@ from typing import Callable, Optional
 from rapidfuzz import fuzz
 
 from .. import config
-from ..ingest.insights import InsightsIndex
-from ..matching.normalize import normalize_caption
+from ..ingest.insights import InsightsIndex, display_name
+from ..matching.normalize import normalize_caption, strip_boilerplate
 from ..matching.permalink import is_share_link, page_slug
-from ..models import CellValue, InsightsRow, RunResult
+from ..models import CellValue, InsightsRow, RowIssue, RunResult
 
 log = logging.getLogger("relay.resolve")
 
 FB_SLOTS = ("fb1", "fb2", "fb3")
-CAPTION_WINDOW_DAYS = 3
+CAPTION_WINDOW_DAYS = config.CAPTION_WINDOW_DAYS
 
 # Resolves a facebook.com/share/… link to its canonical permalink. Injected so
 # this module never imports Playwright — see collectors.mbs.resolve_share_link.
@@ -41,57 +39,210 @@ def _as_runs(result) -> list[RunResult]:
     return list(result) if isinstance(result, (list, tuple)) else [result]
 
 
-def cell_from_insights(row: InsightsRow, metric: str | None = None) -> CellValue | None:
-    """An exact, auditable cell from one export row — the note names the source
-    file and post id so any figure can be traced back to the client's copy."""
+def cell_from_insights(row: InsightsRow, metric: str | None = None,
+                       how: str | None = None) -> CellValue | None:
+    """An exact, auditable cell from one export row.
+
+    The note has to answer "where did this number come from?" on its own, because
+    hovering it is the only route a reader has. It names the line of the file it
+    came from, `how` it was joined, and enough of the export row to check the
+    figure against the live post.
+
+    That last part is not decoration. A `pfbid` in the sheet never equals the one
+    in the export (see `matching.permalink`), and 10.7% of a real month's export
+    rows — including most shared posts — carry a blank Title, so for those a
+    reader searching their own copy by link *or* by caption finds nothing and a
+    correct figure looks invented. The reaction count is what they can actually
+    compare against Facebook.
+    """
     metric = metric or config.INSIGHTS_METRIC
     value = row.metric(metric)
     if value is None:
         return None
     label = "Reach" if metric == "reach" else "Views"
-    note = f"insights export {row.source_file} · post {row.post_id} · {label}"
-    return CellValue(value, "collected", 1.0, note)
+    where = f"insights export {display_name(row.source_file)}"
+    if row.source_row:
+        where += f" row {row.source_row}"
+    parts = [where, f"post {row.post_id}", label]
+    if how:
+        parts.append(how)
+    if not (row.title or "").strip():
+        parts.append("shared post — the export carries no caption for it"
+                     if row.is_share else "the export carries no caption for this post")
+    if row.reactions is not None:
+        parts.append(f"{row.reactions:,} reactions on the export's copy")
+    return CellValue(value, "collected", 1.0, " · ".join(parts))
 
 
 def _by_slug(index: InsightsIndex) -> dict[str, list[InsightsRow]]:
-    """Export rows grouped by page, with captions pre-normalized once.
+    """Export rows grouped by page, with both caption keys computed once.
 
     Built per fill rather than per cell: a month's export runs to thousands of
-    rows and every campaign link would otherwise rescan all of them.
+    rows and every campaign link would otherwise rescan all of them. Each entry
+    is (raw key, boilerplate-stripped key, row).
     """
-    groups: dict[str, list[InsightsRow]] = {}
+    groups: dict[str, list[tuple[str, str, InsightsRow]]] = {}
     for row in index.rows:
         slug = page_slug(row.permalink)
         if slug:
-            groups.setdefault(slug, []).append(row)
+            raw = normalize_caption(row.title or "")
+            groups.setdefault(slug, []).append(
+                (raw, strip_boilerplate(row.title or ""), row))
     return groups
 
 
-def _match_by_caption(groups: dict[str, list[InsightsRow]], caption: str,
-                      url: str, date) -> tuple[InsightsRow, float] | None:
+def _score(key: str, raw: str, stripped: str) -> float | None:
+    """How well a campaign caption matches one export title, or None if it
+    doesn't clear the bar.
+
+    Two keys, two thresholds. The raw title has to clear FUZZY_HIGH. The
+    stripped title — the same caption minus Somoy's "বিস্তারিত কমেন্টে…" tail and
+    hashtag block, which 83% of export rows carry and no campaign sheet ever
+    does — has to clear the much stricter INSIGHTS_STRIPPED_HIGH, because the
+    shorter token set makes the comparison blind to meaning-reversing words.
+    """
+    best = fuzz.token_set_ratio(key, raw) / 100.0
+    if best >= config.FUZZY_HIGH:
+        return best
+    if stripped and stripped != raw:
+        alt = fuzz.token_set_ratio(key, stripped) / 100.0
+        if alt >= config.INSIGHTS_STRIPPED_HIGH:
+            return alt
+    return None
+
+
+# A caption that fits two export rows on one page equally well identifies
+# neither. Returned instead of a match so the caller can say so and leave the
+# cell for the post-id pass, which settles it exactly.
+AMBIGUOUS = object()
+
+
+def _candidates(rows, caption: str, date) -> list[tuple[float, InsightsRow]]:
+    """Every export row whose caption and date can account for this post.
+
+    Ordered best-first, then by publish time nearest the campaign date. That
+    ordering only separates *unequal* scores — see `_match_by_caption` for why
+    an exact tie is refused rather than ranked. The campaign sheet's Date has no
+    time of day, so proximity to it is systematically biased toward the earliest
+    post of the day, which on a re-posted story is the copy that was replaced.
+    """
+    key = normalize_caption(caption or "")
+    if len(key) < config.PREFIX_MIN_LEN:
+        return []
+    out: list[tuple[float, float, InsightsRow]] = []
+    for raw, stripped, row in rows:
+        if date and row.published and \
+                abs(row.published.date() - date.date()) > timedelta(days=CAPTION_WINDOW_DAYS):
+            continue
+        score = _score(key, raw, stripped)
+        if score is None:
+            continue
+        gap = abs((row.published - date).total_seconds()) if (row.published and date) else float("inf")
+        out.append((score, gap, row))
+    out.sort(key=lambda t: (-t[0], t[1]))
+    return [(s, r) for s, _, r in out]
+
+
+def _slug_for(url: str | None, index: InsightsIndex) -> str | None:
+    """The page a campaign link points at, as the export spells it.
+
+    Some link shapes name the page by numeric id rather than vanity slug —
+    `/photo/?fbid=…&set=pb.<page-id>` and `permalink.php?…&id=<page-id>`. The
+    export carries both spellings side by side, so the id translates exactly and
+    those links never have to be guessed at.
+    """
+    if is_share_link(url):
+        return None
+    slug = page_slug(url)
+    return index.slug_for_page_id(slug) or slug if slug else None
+
+
+def _match_by_caption(groups, caption: str, url: str, date,
+                      slug: str | None = None) -> tuple[InsightsRow, float] | None:
     """Match a campaign row to its export row by caption, scoped to one page.
 
     This is the *primary* join for `/posts/pfbid…` links, because `pfbid` blobs
     differ between the campaign sheet and the export for the same post (see
     `matching.permalink`). Scoping is what keeps it safe: only rows on the same
-    page and within a few days of the campaign date are eligible, and the bar is
-    FUZZY_HIGH — a wrong number in a sponsor report is worse than a blank one.
+    page and within a few days of the campaign date are eligible — a wrong
+    number in a sponsor report is worse than a blank one.
+
+    `slug` overrides the page read off the URL, for links that name their page
+    by numeric id.
+
+    Returns `AMBIGUOUS` when the top two candidates score identically. Somoy
+    re-posts a story minutes after the first attempt, and both copies carry the
+    same caption on the same page — measured on April, picking either way puts
+    wrong numbers in the report (one ordering got a 678-view duplicate where the
+    live post had 6,519). Nothing in the caption distinguishes them, so this
+    refuses to guess and leaves the cell to the post-id pass.
     """
-    key = normalize_caption(caption or "")
-    if len(key) < config.PREFIX_MIN_LEN:
-        return None
-    slug = page_slug(url)
+    slug = slug or page_slug(url)
     if not slug:
         return None
-    best: tuple[InsightsRow, float] | None = None
-    for row in groups.get(slug, ()):
-        if date and row.published and \
-                abs(row.published.date() - date.date()) > timedelta(days=CAPTION_WINDOW_DAYS):
-            continue
-        score = fuzz.token_set_ratio(key, normalize_caption(row.title or "")) / 100.0
-        if score >= config.FUZZY_HIGH and (best is None or score > best[1]):
-            best = (row, score)
-    return best
+    hits = _candidates(groups.get(slug, ()), caption, date)
+    if not hits:
+        return None
+    if len(hits) > 1 and hits[0][0] == hits[1][0]:
+        return AMBIGUOUS
+    return (hits[0][1], hits[0][0])
+
+
+def _slot_pages(runs: list[RunResult], index: InsightsIndex) -> dict[str, Counter]:
+    """Which pages each FB slot actually points at, learned from the sheet.
+
+    Campaign sheets are consistent about this — Link 1 is the main page, Link 2
+    and Link 3 are subpages — but which subpage varies row to row, so the
+    distribution is read off the run rather than hard-coded.
+    """
+    pages: dict[str, Counter] = {slot: Counter() for slot in FB_SLOTS}
+    for run in runs:
+        for row in run.rows:
+            for slot in FB_SLOTS:
+                slug = _slug_for(row.links.get(slot), index)
+                if slug:
+                    pages[slot][slug] += 1
+    return pages
+
+
+def _infer_pages(unknown: list[str], hits: list[tuple[float, InsightsRow]],
+                 pages: dict[str, Counter], taken: set[str]) -> dict[str, str]:
+    """Guess which page each page-less link in one campaign row belongs to.
+
+    A `/share/p/…` or `/photo/?fbid=…&set=a.…` link names no page, so the
+    caption alone cannot say which of the several Somoy pages that carried the
+    same story it points at. Three things narrow it down: the story's candidate
+    export rows, the pages this slot points at elsewhere in the sheet, and the
+    pages the row's *other* links already account for — one post per page per
+    row. Slots are assigned together so those constraints interact.
+
+    A slot is only filled when its winning page outweighs the nearest rival by
+    `config.SLOT_PAGE_DOMINANCE`; a close call means several Somoy pages ran the
+    story and the sheet gives no reason to prefer one, so it stays empty.
+    """
+    available: list[str] = []
+    for _, row in hits:
+        slug = page_slug(row.permalink)
+        if slug and slug not in taken and slug not in available:
+            available.append(slug)
+    if not available:
+        return {}
+
+    best, best_weight = {}, 0
+    for combo in permutations(available, min(len(unknown), len(available))):
+        weights = [pages[slot].get(slug, 0) for slot, slug in zip(unknown, combo)]
+        if not all(weights):
+            continue                      # a slot that has never seen this page
+        if sum(weights) > best_weight:
+            best, best_weight = dict(zip(unknown, combo)), sum(weights)
+
+    out = {}
+    for slot, slug in best.items():
+        rivals = [pages[slot].get(other, 0) for other in available if other != slug]
+        top = max(rivals, default=0)
+        if top == 0 or pages[slot][slug] >= config.SLOT_PAGE_DOMINANCE * top:
+            out[slot] = slug
+    return out
 
 
 def fill_from_insights(
@@ -114,9 +265,11 @@ def fill_from_insights(
         return 0
 
     groups = _by_slug(index)
+    slot_pages = _slot_pages(runs, index)
     filled = 0
     for run in runs:
         for row_idx, row in enumerate(run.rows):
+            pageless: list[str] = []
             for slot in FB_SLOTS:
                 url = row.links.get(slot)
                 if not url or row.cells[slot].value is not None:
@@ -136,16 +289,29 @@ def fill_from_insights(
                 # (/videos/<id>, permalink.php?story_fbid=). pfbid links will
                 # miss here by design, and fall through to the caption join.
                 hit = index.lookup(url)
-                cell = cell_from_insights(hit, metric) if hit else None
+                cell = cell_from_insights(
+                    hit, metric, how="matched by the sheet's own link") if hit else None
 
-                if cell is None and not is_share_link(url):
-                    guess = _match_by_caption(groups, row.caption, url, row.date)
+                if cell is None:
+                    slug = _slug_for(url, index)
+                    if slug is None:
+                        # No page in the URL, so no group to scope against —
+                        # handled once per row, after the pages the other slots
+                        # account for are known.
+                        pageless.append(slot)
+                        continue
+                    guess = _match_by_caption(groups, row.caption, url, row.date, slug)
+                    if guess is AMBIGUOUS:
+                        row_issue(run, row, [slot],
+                                  "this page ran the same story twice and the caption "
+                                  "cannot say which post the link points at")
+                        continue
                     if guess:
                         found, score = guess
-                        cell = cell_from_insights(found, metric)
+                        cell = cell_from_insights(
+                            found, metric, how=f"matched by caption ({score:.0%})")
                         if cell:
                             cell.confidence = round(score, 3)
-                            cell.note += f" · matched by caption ({score:.0%})"
 
                 if cell is None:
                     continue
@@ -159,119 +325,240 @@ def fill_from_insights(
                         log.warning("checkpoint failed for row_idx %s %s: %s",
                                     row_idx, slot, exc)
 
+            filled += _fill_pageless(run, row, row_idx, pageless, groups,
+                                     slot_pages, index, metric, persist)
+
     log.info("insights export filled %d cells from %d posts", filled, len(index))
     return filled
 
 
-SUB_SLOTS = ("fb2", "fb3")
+def _fill_pageless(run: RunResult, row, row_idx: int, slots: list[str], groups,
+                   slot_pages, index: InsightsIndex, metric: str, persist) -> int:
+    """Fill the row's page-less links (share/photo) once their pages are inferred.
+
+    Done per row rather than per cell because the inference needs the whole row:
+    the pages the resolvable links already account for are exactly the pages
+    these links cannot be on.
+    """
+    if not slots:
+        return 0
+    hits = _candidates([e for entries in groups.values() for e in entries],
+                       row.caption, row.date)
+    if not hits:
+        row_issue(run, row, slots,
+                  "link names no page and no export row matches this caption")
+        return 0
+
+    taken = {_slug_for(row.links.get(s), index) for s in FB_SLOTS} - {None}
+    inferred = _infer_pages(slots, hits, slot_pages, taken)
+    filled = 0
+    for slot in slots:
+        slug = inferred.get(slot)
+        if not slug:
+            row_issue(run, row, [slot],
+                      "link names no page and the sheet gives no clear page for this slot")
+            continue
+        found, score = next((r, s) for s, r in hits if page_slug(r.permalink) == slug)
+        kind = "share" if is_share_link(row.links[slot]) else "photo"
+        cell = cell_from_insights(
+            found, metric,
+            how=(f"page inferred as {slug} — the link is a {kind} link that names "
+                 f"none ({score:.0%} caption match) — verify"))
+        if cell is None:
+            continue
+        # Never as trustworthy as a link that named its own page: the caption and
+        # the slot's usual page agree, but nothing in the URL confirms it.
+        cell.confidence = round(min(score, 0.9), 3)
+        row.cells[slot] = cell
+        filled += 1
+        if persist is not None:
+            try:
+                persist(run, row_idx, slot, cell)
+            except Exception as exc:
+                log.warning("checkpoint failed for row_idx %s %s: %s", row_idx, slot, exc)
+    return filled
 
 
-def _export_target(groups, index: InsightsIndex, url: str, caption: str,
-                   date, metric: str) -> int | None:
-    """The export's own figure for whatever post `url` points at."""
-    hit = index.lookup(url)
-    if hit is None and not is_share_link(url):
-        guess = _match_by_caption(groups, caption, url, date)
-        hit = guess[0] if guess else None
-    return hit.metric(metric) if hit else None
+def row_issue(run: RunResult, row, slots: list[str], reason: str) -> None:
+    """Record why a cell stayed empty, so the dashboard can say so."""
+    run.issues.append(RowIssue(
+        f"{run.brand} {run.month}", row.no,
+        f"{'/'.join(s.upper() for s in slots)}: {reason}"))
 
 
-def reassign_subpage_slots(result: RunResult | list[RunResult], index: InsightsIndex,
-                           metric: str | None = None) -> int:
-    """Put each supervisor value on the slot whose page actually earned it.
+def fill_instagram_from_insights(result: RunResult | list[RunResult],
+                                 index: InsightsIndex, metric: str | None = None,
+                                 persist=None) -> int:
+    """Fill Instagram cells from an Instagram content export. Returns cells filled.
 
-    `rules.py` assumes the supervisor's `Views_Match_1` is Somoy Shongbad and
-    `Views_Match_2..N` the category pages (FR-10). It isn't: their file lists
-    values in whatever order its scraper found them, so a sizeable share of the
-    time VM1 belongs to the category page instead. Checked against the export on
-    a real month, a substantial minority of verifiable FB cells carried a
-    different page's number — the row total stayed right while the columns were
-    swapped.
-
-    This does not change any number. It permutes the values the supervisor
-    supplied across that row's own FB slots, choosing the arrangement that best
-    matches each linked page's figure in the export. A value can only move to
-    another slot in the same row, and only when the export can identify at
-    least two of those slots' posts.
-
-    Returns the number of cells whose slot changed.
+    Nothing here resembles the Facebook path, and that is the point. An Instagram
+    shortcode is stable — the code in a link someone copied is the code in Meta's
+    export — so this is a plain exact join needing no browser visit, no caption
+    comparison and no page inference. Facebook needs all three only because its
+    `pfbid` blobs differ between the two sources.
     """
     metric = metric or config.INSIGHTS_METRIC
     runs = _as_runs(result)
     if not len(index):
         return 0
-
-    groups = _by_slug(index)
-    moved = 0
+    filled = 0
     for run in runs:
-        for row in run.rows:
-            slots = [s for s in SUB_SLOTS
-                     if row.links.get(s) and row.cells[s].provenance == "matched"
-                     and row.cells[s].value is not None]
-            if len(slots) < 2:
+        for row_idx, row in enumerate(run.rows):
+            url = row.links.get("ig")
+            if not url or row.cells["ig"].value is not None:
                 continue
-
-            targets = {s: _export_target(groups, index, row.links[s], row.caption,
-                                         row.date, metric) for s in slots}
-            known = [s for s in slots if targets[s]]
-            if len(known) < 2:
-                continue    # nothing to arbitrate between
-
-            values = [row.cells[s].value for s in slots]
-
-            def cost(order):
-                return sum(abs(order[slots.index(s)] - targets[s]) / targets[s]
-                           for s in known)
-
-            best = min(permutations(values), key=cost)
-            if list(best) == values or cost(best) >= cost(values):
+            hit = index.lookup_ig(url)
+            if hit is None:
                 continue
-
-            originals = {s: row.cells[s] for s in slots}
-            for slot, value in zip(slots, best):
-                if originals[slot].value == value:
-                    continue
-                came_from = next(s for s in slots if originals[s].value == value)
-                cell = originals[came_from]
-                note = (cell.note + "; " if cell.note else "") + \
-                    f"slot corrected from {came_from.upper()} — the insights export " \
-                    f"attributes this figure to {page_slug(row.links[slot])}"
-                row.cells[slot] = CellValue(value, cell.provenance, cell.confidence, note)
-                moved += 1
-
-    if moved:
-        log.info("insights export corrected the slot of %d supervisor values", moved)
-    return moved
+            cell = cell_from_insights(hit, metric,
+                                      how="matched by the post's shortcode")
+            if cell is None:
+                continue
+            row.cells["ig"] = cell
+            filled += 1
+            if persist is not None:
+                try:
+                    persist(run, row_idx, "ig", cell)
+                except Exception as exc:
+                    log.warning("checkpoint failed for row_idx %s ig: %s", row_idx, exc)
+    if filled:
+        log.info("instagram export filled %d cells", filled)
+    return filled
 
 
-def fit_k_table(index: InsightsIndex, metric: str | None = None) -> dict[tuple[int, int], float]:
-    """Fit the reactions->views multiplier from the user's own export data.
 
-    A single k cannot describe this relationship: measured on a real export the
-    ratio falls steeply as engagement rises — several hundred x on posts with a
-    handful of reactions, down to tens of x on the busiest — so a flat 70-120
-    landed close for only a small fraction of posts. Bucketing by reaction count
-    and taking each bucket's median tracks that curve.
+# --- caption repair: rows whose sheet caption no longer describes the post ---
+#
+# The campaign sheet is hand-maintained. Someone writes a caption and pastes the
+# links; later the caption is edited ON THE POST and nobody updates the sheet.
+# Because one caption serves every FB slot in its row, a stale one breaks the
+# whole row at once — measured on June, 72 cells across 40 rows.
+#
+# It cannot be repaired offline. For 32 of those 40 rows the sheet's caption does
+# not reach even 0.70 against any post on one of the linked pages: the text was
+# rewritten, not tweaked. Lowering the bar produces wrong numbers rather than
+# missing ones (a "gold price cut" post scored 0.93 against a "gold price raised"
+# caption). So one post per row is read through the browser, and the row's
+# remaining slots are recovered from that anchor here.
 
-    Buckets with too few samples are omitted; callers fall back to K_DEFAULT.
+# Which slot earns the visit. Subpages first: the mainpage is the page most
+# likely to have had its headline rewritten, so anchoring elsewhere leaves the
+# hardest cell to be recovered rather than depended on. Measured on June the
+# difference is small (99.3% vs 99.1% sibling accuracy) but it is free.
+REPAIR_SLOT_ORDER = ("fb2", "fb3", "fb1")
+
+
+
+def _agrees(anchor: InsightsRow, other: InsightsRow) -> float | None:
+    """How firmly two export rows describe the same story, or None below the bar.
+
+    Both sides are Meta's own text, so this is a near-identity test rather than
+    the lenient sheet-caption comparison in `_score`. Compared on the
+    boilerplate-stripped titles, since the tail and hashtag block are page
+    furniture that differs between a mainpage and a subpage post.
+    """
+    score = fuzz.token_set_ratio(strip_boilerplate(anchor.title or ""),
+                                 strip_boilerplate(other.title or "")) / 100.0
+    return score if score >= config.REPAIR_SIBLING_HIGH else None
+
+
+def _story_siblings(rows, anchor: InsightsRow) -> list[tuple[float, InsightsRow]]:
+    """Export rows that are the same story as `anchor`, best agreement first."""
+    if anchor.published is None:
+        return []
+    window = timedelta(minutes=config.REPAIR_SIBLING_WINDOW_MIN)
+    out = []
+    for entry in rows:
+        row = entry[2] if isinstance(entry, tuple) else entry
+        if row is anchor or row.published is None:
+            continue
+        if abs(row.published - anchor.published) > window:
+            continue
+        score = _agrees(anchor, row)
+        if score is not None:
+            out.append((score, row))
+    out.sort(key=lambda t: -t[0])
+    return out
+
+
+def refresh_caption(row, text: str) -> str:
+    """Put the post's own caption on the row, preserving the sheet's.
+
+    Returns the text that was replaced, or "" when nothing changed. Idempotent:
+    a second repair never overwrites `original_caption` with the first repair's
+    output, so the sheet's wording stays recoverable however often this runs.
+    """
+    new = strip_boilerplate(text or "")
+    old = row.caption or ""
+    if not new or normalize_caption(new) == normalize_caption(old):
+        return ""
+    if not row.original_caption:
+        row.original_caption = old
+    row.caption = new
+    return old
+
+
+def fill_row_from_anchor(run: RunResult, row, row_idx: int, anchor_slot: str,
+                         anchor: InsightsRow, groups, slot_pages,
+                         index: InsightsIndex, metric: str | None = None,
+                         persist=None) -> int:
+    """Fill the row's other empty FB slots from the post the browser identified.
+
+    No further navigation. Somoy cross-posts one story to several pages within
+    minutes, so each remaining slot's post is the row on that slot's own page
+    whose export title agrees with the anchor's. A runner-up within
+    `REPAIR_SIBLING_MARGIN` declines the slot instead of guessing — that is the
+    same story running twice on one page, and the sheet gives no way to say
+    which of the two the link points at.
     """
     metric = metric or config.INSIGHTS_METRIC
-    samples: dict[tuple[int, int], list[float]] = {b: [] for b in config.K_BUCKETS}
-    for row in index.rows:
-        value, reactions = row.metric(metric), row.reactions
-        if not value or not reactions or reactions <= 0:
+    filled = 0
+    for slot in FB_SLOTS:
+        if slot == anchor_slot or not row.links.get(slot):
             continue
-        for lo, hi in config.K_BUCKETS:
-            if lo <= reactions <= hi:
-                samples[(lo, hi)].append(value / reactions)
-                break
-
-    table: dict[tuple[int, int], float] = {}
-    for bucket, ratios in samples.items():
-        if len(ratios) < config.K_BUCKET_MIN_SAMPLES:
+        if row.cells[slot].value is not None:
             continue
-        ratios.sort()
-        mid = len(ratios) // 2
-        median = ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
-        table[bucket] = round(median, 1)
-    return table
+        url = row.links[slot]
+        slug = _slug_for(url, index)
+        if slug:
+            hits = _story_siblings(groups.get(slug, ()), anchor)
+        else:
+            # A share or album-photo link names no page. Same story agreement,
+            # but the page comes from where this slot points elsewhere in the
+            # sheet — `_infer_pages` and its dominance guard, fed a much better
+            # candidate set than a stale caption could produce.
+            everything = [e for entries in groups.values() for e in entries]
+            hits = _story_siblings(everything, anchor)
+            taken = {_slug_for(row.links.get(s), index) for s in FB_SLOTS} - {None}
+            taken.add(page_slug(anchor.permalink))
+            chosen = _infer_pages([slot], hits, slot_pages, taken).get(slot)
+            hits = [(s, r) for s, r in hits if page_slug(r.permalink) == chosen] \
+                if chosen else []
+        if not hits:
+            row_issue(run, row, [slot],
+                      f"no post on this page matches the {anchor_slot.upper()} post "
+                      "read from Facebook")
+            continue
+        if len(hits) > 1 and hits[0][0] - hits[1][0] < config.REPAIR_SIBLING_MARGIN:
+            row_issue(run, row, [slot],
+                      "two posts on this page carry the same story — the link "
+                      "does not say which one it is")
+            continue
+        score, found = hits[0]
+        apart = int(abs((found.published - anchor.published).total_seconds()) // 60)
+        cell = cell_from_insights(
+            found, metric,
+            how=(f"same story as the {anchor_slot.upper()} post read from Facebook "
+                 f"({score:.0%} title agreement, {apart}m apart)"))
+        if cell is None:
+            continue
+        # Never 1.0: the story matches, but this slot's URL never confirmed it.
+        cell.confidence = round(min(score, 0.95), 3)
+        row.cells[slot] = cell
+        filled += 1
+        if persist is not None:
+            try:
+                persist(run, row_idx, slot, cell)
+            except Exception as exc:
+                log.warning("checkpoint failed for row_idx %s %s: %s", row_idx, slot, exc)
+    return filled

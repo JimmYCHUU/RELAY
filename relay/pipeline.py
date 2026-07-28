@@ -1,15 +1,21 @@
-"""Pipeline orchestrator — single entry point for CLI and web (SDD 2)."""
+"""Pipeline orchestrator — single entry point for CLI and web (SDD 2).
+
+Everything a figure can come from is one of Meta's own exports. The campaign
+sheet supplies the rows, their links and their dates; the Facebook and Instagram
+content exports supply the numbers. Nothing is inferred from a multiplier, and
+nothing arrives from a hand-made file any more — a cell RELAY cannot account for
+stays empty until a collector visits the post or someone types a value in.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
 
 from .ingest.campaign import parse_campaign
-from .ingest.insights import InsightsIndex, build_index
-from .ingest.supervisor import parse_matched
-from .matching.engine import match_rows
-from .models import Match, RunResult
-from .resolve.insights_fill import fill_from_insights, reassign_subpage_slots
+from .ingest.insights import build_index
+from .models import RunResult
+from .resolve.insights_fill import (fill_from_insights,
+                                    fill_instagram_from_insights)
 from .resolve.rules import build_row
 
 
@@ -17,49 +23,20 @@ def run_pipeline(
     campaign_path: str | Path,
     sheet: str,
     brand: str,
-    mainpage_path: Optional[str | Path] = None,
-    subpage_path: Optional[str | Path] = None,
-    insta_path: Optional[str | Path] = None,
     insights_paths: Optional[list[str | Path]] = None,
+    ig_insights_paths: Optional[list[str | Path]] = None,
 ) -> RunResult:
     campaign, issues = parse_campaign(campaign_path, sheet)
+    rows = [build_row(crow) for crow in campaign]
+    result = RunResult(brand=brand, month=sheet, rows=rows, issues=issues)
 
-    def matches_for(path: Optional[str | Path]) -> list[Match] | None:
-        if not path:
-            return None
-        mf = parse_matched(path)
-        issues.extend(mf.issues)
-        return match_rows(campaign, mf.for_brand(brand))
-
-    main_m = matches_for(mainpage_path)
-    sub_m = matches_for(subpage_path)
-    insta_m = matches_for(insta_path)
-
-    rows = []
-    tiers: dict[int, dict[str, str]] = {}
-    for i, crow in enumerate(campaign):
-        main = main_m[i] if main_m else None
-        sub = sub_m[i] if sub_m else None
-        insta = insta_m[i] if insta_m else None
-        rows.append(build_row(crow, main, sub, insta))
-        tiers[crow.no or i + 1] = {
-            "mainpage": main.tier if main else "n/a",
-            "subpage": sub.tier if sub else "n/a",
-            "instagram": insta.tier if insta else "n/a",
-        }
-
-    result = RunResult(brand=brand, month=sheet, rows=rows, issues=issues, match_tiers=tiers)
-
-    # Meta's own figures fill what the supervisor file couldn't — before any
-    # estimate is ever considered. Share links need a browser to resolve, so
-    # those are left to the collector, which re-checks this same index.
-    result.insights = build_index(insights_paths)
+    # One index over both exports: they are the same shape with different words
+    # for the same columns (see config.INSIGHTS_HEADERS), and each fill step keys
+    # on the identifier its own platform actually carries.
+    result.insights = build_index(list(insights_paths or []) + list(ig_insights_paths or []))
     issues.extend(result.insights.issues)
     if len(result.insights):
-        # First put the supervisor's own values on the right slots — their
-        # Views_Match_N order does not track Link 2/Link 3 (FR-10a) — then fill
-        # what they had nothing for.
-        reassign_subpage_slots(result, result.insights)
         fill_from_insights(result, result.insights)
+        fill_instagram_from_insights(result, result.insights)
 
     return result

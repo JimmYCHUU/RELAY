@@ -166,8 +166,9 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
 <!-- ── Data Sources (inputs) ── -->
 <section id="view-inputs" class="view" hidden>
   <header class="view-head">
-    <p class="hint">Drop this month's files. Only the campaign sheet is required — supervisor
-    files pre-fill most cells, collectors scrape the rest.</p>
+    <p class="hint">Drop this month's files. Only the campaign sheet is required, but with
+    both Meta exports in hand RELAY can account for nearly every figure exactly — and
+    anything it cannot is left blank rather than estimated.</p>
   </header>
 
   <div class="drop-grid">
@@ -179,36 +180,22 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <span class="file-name" data-empty="Click or drop .xlsx"></span>
       </div>
     </div>
-    <div class="drop" data-kind="mainpage" tabindex="0">
-      <div class="drop-icon ic-blue"><svg class="ic-svg"><use href="#i-news"/></svg></div>
-      <div class="drop-body">
-        <div class="drop-head"><strong>Mainpage matched</strong><span class="opt">optional</span></div>
-        <p>Somoy News TV views (supervisor file)</p>
-        <span class="file-name" data-empty="Click or drop .xlsx"></span>
-      </div>
-    </div>
-    <div class="drop" data-kind="subpage" tabindex="0">
-      <div class="drop-icon ic-green"><svg class="ic-svg"><use href="#i-pages"/></svg></div>
-      <div class="drop-body">
-        <div class="drop-head"><strong>Subpage matched</strong><span class="opt">optional</span></div>
-        <p>Shongbad + category subpages (supervisor file)</p>
-        <span class="file-name" data-empty="Click or drop .xlsx"></span>
-      </div>
-    </div>
-    <div class="drop" data-kind="insta" tabindex="0">
-      <div class="drop-icon ic-pink"><svg class="ic-svg"><use href="#i-camera"/></svg></div>
-      <div class="drop-body">
-        <div class="drop-head"><strong>Instagram matched</strong><span class="opt">optional</span></div>
-        <p>Instagram views (supervisor file)</p>
-        <span class="file-name" data-empty="Click or drop .xlsx"></span>
-      </div>
-    </div>
     <div class="drop" data-kind="insights" data-multi="1" tabindex="0">
       <div class="drop-icon ic-amber"><svg class="ic-svg"><use href="#i-zap"/></svg></div>
       <div class="drop-body">
-        <div class="drop-head"><strong>Insights export</strong><span class="opt">recommended</span></div>
-        <p>Business Suite content export — exact Reach per post, matched by link.
-           One file per page; drop several.</p>
+        <div class="drop-head"><strong>Facebook export</strong><span class="opt">recommended</span></div>
+        <p>Business Suite content export — Meta's own exact figure per post.
+           Drop as many as the month needs.</p>
+        <span class="file-name" data-empty="Click or drop .csv / .xlsx"></span>
+      </div>
+    </div>
+    <div class="drop" data-kind="ig_insights" data-multi="1" tabindex="0">
+      <div class="drop-icon ic-pink"><svg class="ic-svg"><use href="#i-camera"/></svg></div>
+      <div class="drop-body">
+        <div class="drop-head"><strong>Instagram export</strong><span class="opt">recommended</span></div>
+        <p>Instagram content export. Joined on the post's shortcode, which is the
+           same in your link and in Meta's file — so it fills exactly, with no
+           browser session at all.</p>
         <span class="file-name" data-empty="Click or drop .csv / .xlsx"></span>
       </div>
     </div>
@@ -233,8 +220,8 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
 <!-- ── Match Review ── -->
 <section id="view-review" class="view" hidden>
   <header class="view-head">
-    <p class="hint">Supervisor-file matches are filled in. Collectors scrape the rest —
-    or click any cell to fix it yourself.</p>
+    <p class="hint">Figures from the insights export and any supervisor files are filled in.
+    Collectors scrape the rest — or click any cell to fix it yourself.</p>
     <div class="seg-icons" role="group" aria-label="Layout">
       <button class="segbtn" id="modeList" title="List &amp; detail" aria-label="List and detail view">
         <svg class="ic-svg"><use href="#i-rows"/></svg></button>
@@ -266,22 +253,23 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
         <button id="collectX" class="primary">Collect X views</button>
       </div>
       <div class="collect-card">
-        <div class="collect-title"><svg class="ic-svg"><use href="#i-facebook"/></svg> Facebook missing cells</div>
-        <p>Runs after the <strong>insights export</strong>, which already fills every
-           post it covers with Meta's exact figure. This resolves shared links and
-           re-checks the export for them. A reactions estimate is the last resort
-           only — its multiplier is fitted from your own export data, and those
-           cells are marked ≈.</p>
+        <div class="collect-title"><svg class="ic-svg"><use href="#i-facebook"/></svg> Unresolved Facebook posts</div>
+        <p>Opens each post the export could not account for and reads its Facebook
+           post ID — the one identifier a live post and the export share, since a
+           copied link's <code>pfbid</code> differs from the export's and a stale or
+           placeholder caption matches nothing. Identifying one post in a row usually
+           identifies that row's others for free, and refreshes a caption the sheet
+           has let go stale. Nothing here is estimated: what it cannot account for
+           stays blank.</p>
         <div class="collect-fb-row">
-          <button id="collectFB" class="primary">Collect Facebook</button>
+          <button id="collectFB" class="primary">Resolve Facebook posts</button>
         </div>
       </div>
       <div class="collect-card">
         <div class="collect-title"><svg class="ic-svg"><use href="#i-camera"/></svg> Instagram missing cells</div>
-        <p>Reads each post page through the same Meta session — reels report
-           <strong>real views</strong>; photo posts have no view figure, so likes ×
-           a fitted multiplier fills them, marked ≈. Handy when there is
-           no supervisor match file at all.</p>
+        <p>Only for what the Instagram export could not account for, which is little —
+           a shortcode joins that file exactly. Reels report <strong>real views</strong>;
+           a photo post showing none is left blank.</p>
         <button id="collectIG" class="primary">Collect Instagram</button>
       </div>
     </div>
@@ -476,23 +464,7 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <p id="cellMeta" class="hint"></p>
     <a id="cellLink" class="iconlink" target="_blank" rel="noopener" hidden>
       <svg class="ic-svg"><use href="#i-external"/></svg> open the post to read its numbers</a>
-    <div class="tabs">
-      <button type="button" class="tab active" data-tab="estimate">Estimate from reactions</button>
-      <button type="button" class="tab" data-tab="manual">Manual value</button>
-    </div>
-    <div class="tab-pane" data-pane="estimate">
-      <label>Reactions on the post
-        <input id="reactions" type="number" min="0" placeholder="e.g. 812">
-      </label>
-      <label>Multiplier k <output id="kOut">95</output>
-        <input id="kSlider" type="range" min="70" max="120" value="95">
-      </label>
-      <p class="hint">views ≈ reactions × k &nbsp;(70–120; the last digit is
-        auto-nudged so estimates never end in 0 or 5). Leave the slider alone to
-        let RELAY fit k from your insights export — a flat multiplier matched only
-        8% of real posts.</p>
-    </div>
-    <div class="tab-pane" data-pane="manual" hidden>
+    <div class="tab-pane" data-pane="manual">
       <label>Views value
         <input id="manualValue" type="number" min="0" placeholder="exact number">
       </label>

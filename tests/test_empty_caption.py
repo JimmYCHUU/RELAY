@@ -6,8 +6,7 @@ from datetime import datetime
 import openpyxl
 
 from relay.ingest.campaign import parse_campaign
-from relay.matching.engine import match_rows
-from relay.models import MatchedRow
+
 
 HEADER = ["No", "Date", "Content's name", "Content's Link [1]",
           "Content's Link 2", "Content's Link 3", "X, Link 4", "Instagram"]
@@ -57,11 +56,3 @@ def test_footer_summary_rows_are_not_content(tmp_path):
     assert not any("row kept" in i.reason for i in issues)
 
 
-def test_captionless_row_never_caption_matches(tmp_path):
-    rows, _ = parse_campaign(_sheet(tmp_path), "April")
-    matched = [MatchedRow("Brand A demo caption", [123]),
-               MatchedRow("", [999])]  # a blank supervisor line must not pair up
-    result = match_rows(rows, matched)
-    assert result[0].tier == "exact"
-    assert result[1].tier == "none"
-    assert result[1].matched is None

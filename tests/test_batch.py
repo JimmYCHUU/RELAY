@@ -6,7 +6,8 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import CAMPAIGN, WP_INSTA, WP_MAIN, WP_SUB
+from tests.conftest import CAMPAIGN
+
 
 
 @pytest.fixture()
@@ -26,7 +27,6 @@ def two_runs(client):
     for brand in ("Brand A", "Brand B"):
         res = client.post("/api/run", json={
             "campaign": str(CAMPAIGN), "sheet": "April", "brand": brand,
-            "mainpage": str(WP_MAIN), "subpage": str(WP_SUB), "insta": str(WP_INSTA),
         })
         assert res.status_code == 200, res.text
         ids.append(res.json()["run_id"])
@@ -87,6 +87,12 @@ def test_autopilot_dry_run_completes_campaigns_in_load_order(client, two_runs):
     # campaign-major order: all of brand 1's platform passes before brand 2's
     brands = [e.split(" · ")[0] for e in s["events"]]
     assert brands == ["Brand A"] * 3 + ["Brand B"] * 3
+    # caption repair runs before Facebook — it fills cells that pass would
+    # otherwise pay a browser visit each to reach
+    # Facebook first: it identifies posts and refreshes stale captions, so the
+    # later passes work from a row that already describes itself correctly.
+    stages = [e.split(" · ")[1].split(":")[0] for e in s["events"][:3]]
+    assert stages == ["Facebook", "Instagram", "X"]
 
 
 def test_autopilot_checks_meta_session_upfront(client, two_runs, tmp_path, monkeypatch):

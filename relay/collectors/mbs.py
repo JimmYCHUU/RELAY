@@ -35,7 +35,16 @@ _STORY_ID_B64 = re.compile(r'"storyID"\s*:\s*"([A-Za-z0-9+/=]+)"')
 _POST_ID = re.compile(r'"post_id"\s*:\s*"(\d+)"')
 
 
-def _target_story_id(content: str) -> str | None:
+def _target_story_id(content: str, strict: bool = False) -> str | None:
+    """The displayed post's numeric id.
+
+    `strict=True` returns only the routing storyID, never the `post_id`
+    fallback, and is what any join to the insights export must use. The two
+    callers want different things from a wrong answer: anchoring the reactions
+    window on a neighbouring story just fails to find a total, whereas joining
+    the export on a neighbouring story's id silently prints that story's Views
+    in a sponsor report.
+    """
     m = _STORY_ID_B64.search(content)
     if m:
         try:
@@ -45,6 +54,8 @@ def _target_story_id(content: str) -> str | None:
                 return tail
         except Exception:
             pass
+    if strict:
+        return None
     m = _POST_ID.search(content)
     return m.group(1) if m else None
 
@@ -169,7 +180,8 @@ def collect_fb_post(page, url: str,
         pass
     reactions = None
     content = ""
-    tid = None
+    tid = None                  # loose — good enough to anchor the reactions window
+    story_id = None             # strict — the only id safe to join the export on
     last_size = None
     for _ in range(5):
         # snapshotting a multi-MB permalink page and regex-scanning it is the
@@ -185,6 +197,7 @@ def collect_fb_post(page, url: str,
             # the routing storyID sits in the initial server HTML, so it never
             # changes across the poll — derive it from the first snapshot only
             tid = tid or _target_story_id(content)
+            story_id = story_id or _target_story_id(content, strict=True)
             reactions = _reactions_anchored(content, tid)
             if reactions is not None:
                 break
@@ -230,14 +243,45 @@ def collect_fb_post(page, url: str,
         views = None
 
     if views is not None:
-        return CellValue(views, "collected", 1.0, source), reactions, tid
+        return CellValue(views, "collected", 1.0, source), reactions, story_id
     note = ("no views figure on the public post (normal for photo posts) — "
             "not in the insights export either; reactions available for the estimate"
             if reactions else
             "no views figure and no reactions found")
-    # tid may still be usable by the caller for an export lookup even when
-    # nothing could be read off the page itself
-    return CellValue.missing(note), reactions, tid
+    # the story id may still be usable by the caller for an export lookup even
+    # when nothing could be read off the page itself
+    return CellValue.missing(note), reactions, story_id
+
+
+# A logged-in tab title is "(20+) somoynews.tv - <caption> | Facebook": an unread
+# badge, the page name, then the text we actually want. Stripping only the
+# trailing "| Facebook" used to leave the first two glued to the caption, and
+# they were written into the report — verified on a June row.
+_TAB_BADGE = re.compile(r"^\s*\(\d+\+?\)\s*")
+_TAB_SITE = re.compile(r"(\s*[|\-–—]\s*)?\b(Facebook|Instagram)\s*$", re.I)
+_TAB_PAGE = re.compile(r"^(?P<page>[^|]{1,40}?)\s+[-–—]\s+(?=\S)")
+
+
+def clean_page_title(title: str | None) -> str | None:
+    """A post's caption recovered from a browser tab title, or None.
+
+    The page-name prefix is only removed when it actually looks like one —
+    short and Latin-script, as every Somoy page is. A Bengali caption may well
+    contain " - " of its own ("আর্জেন্টিনা - সুইজারল্যান্ড"), and cutting at the
+    first dash would throw half of it away; the same script test that separates
+    a brand token from a caption in `matching.normalize` separates these.
+
+    Returns None rather than a guess when nothing recognisable survives: a page
+    with no caption leaves only site chrome, and a page name is not a caption.
+    Whatever comes back is shown to a human and never matched on.
+    """
+    from ..matching.normalize import _ascii_fraction
+
+    text = _TAB_SITE.sub("", _TAB_BADGE.sub("", (title or "").strip())).strip()
+    hit = _TAB_PAGE.match(text)
+    if hit and _ascii_fraction(hit.group("page")) >= 0.6:
+        text = text[hit.end():].strip()
+    return text[:300] or None
 
 
 def extract_caption(page) -> str | None:
@@ -252,8 +296,7 @@ def extract_caption(page) -> str | None:
     except Exception:
         pass
     try:
-        title = re.sub(r"\s*[|\-–]\s*Facebook.*$", "", (page.title() or "").strip())
-        return title[:300] or None
+        return clean_page_title(page.title())
     except Exception:
         return None
 

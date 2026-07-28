@@ -7,7 +7,6 @@ from typing import Callable, Optional
 
 from .. import config
 from ..models import CellValue, RunResult
-from ..resolve.heuristic import estimate_views
 from .base import BudgetExceeded, ChallengeDetected, Pacer
 
 log = logging.getLogger("relay.collectors")
@@ -35,6 +34,18 @@ ProgressCb = Optional[Progress]
 # Checkpoint hook: (run, row_idx, slot, cell), called after every filled cell
 # so a crash/power-off mid-collection loses nothing already collected.
 PersistCb = Optional[Callable[[RunResult, int, str, CellValue], None]]
+
+# Checkpoint hook for a repaired caption: (run, row_idx, anchor_slot, original,
+# repaired). Each one costs a paced browser visit, so it is worth the same
+# crash-safety as a collected cell.
+PersistCaptionCb = Optional[Callable[[RunResult, int, str, str, str], None]]
+
+# Worth spelling out on the cell rather than only in the progress log: a reader
+# checking this figure against their own copy of the export will search by the
+# sheet's link and find nothing, because the two name the same post with
+# different `pfbid` blobs. Only Meta's numeric id is shared between them.
+_BY_POST_ID = ("identified by post id read from the post page — the sheet's link "
+               "and the export use different pfbid blobs")
 
 
 def _checkpoint(persist: PersistCb, run: RunResult, row_idx: int, slot: str,
@@ -120,154 +131,190 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
     return filled
 
 
-def collect_facebook(result: RunResult | list[RunResult], k: float | None = None,
-                     pacer: Pacer | None = None,
+def resolve_facebook(result: RunResult | list[RunResult], pacer: Pacer | None = None,
                      headed: bool = False, progress: ProgressCb = None,
-                     limit: int | None = None, persist: PersistCb = None) -> int:
-    """Fill missing FB cells via the user's Meta Business Suite session;
-    shared posts fall back to reactions × k estimation automatically."""
+                     limit: int | None = None, persist: PersistCb = None,
+                     persist_caption: PersistCaptionCb = None) -> int:
+    """Account for every Facebook cell the export could not reach on its own.
+
+    One pass, one mechanism: identify the post, then take Meta's own figure for
+    it. A post is identified by the numeric id read off its page — the only key
+    the live post and the export share, since a `pfbid` differs between a copied
+    link and the export, and a rewritten or placeholder caption matches nothing.
+
+    Nothing here estimates. A cell this pass cannot account for stays empty, and
+    the reason is recorded; a multiplier applied to reactions was measured wrong
+    for ~92% of posts, and a blank cell is worth more to a sponsor than a
+    plausible invention.
+
+    Visits are spent sparingly rather than one per cell. Share links resolve to a
+    permalink the export already knows. The first post identified in a row also
+    identifies that row's other posts for free, because Somoy cross-posts one
+    story to several pages within minutes — so a three-link row usually costs one
+    visit, and only what remains unaccounted for is visited in turn.
+
+    Refreshing a stale sheet caption falls out of the same work: once the post is
+    identified, the export's title is what it actually says now.
+    """
+    from ..resolve.insights_fill import (FB_SLOTS, REPAIR_SLOT_ORDER, _by_slug,
+                                         _slot_pages, cell_from_insights,
+                                         fill_row_from_anchor, refresh_caption,
+                                         row_issue)
+    from ..matching.permalink import is_share_link
     from .browser import persistent_session
     from .mbs import collect_fb_post, extract_caption, resolve_share_link
-
-    from ..resolve.insights_fill import cell_from_insights, fit_k_table
 
     runs = _as_runs(result)
     tag = (lambda run: f"{run.brand} · ") if len(runs) > 1 else (lambda run: "")
     pacer = pacer or Pacer()
     p = progress or Progress()
 
-    # Meta's export is the source of truth; the multiplier only ever fills what
-    # it cannot account for, and its k is fitted from that same export rather
-    # than guessed (a flat 70-120 was measured right for few posts).
     index = next((r.insights for r in runs if getattr(r, "insights", None)), None)
-    k_table = fit_k_table(index) if index is not None and len(index) else None
-    if k_table:
-        p.log(f"multiplier fitted from {len(index):,} posts in the insights export")
+    if index is None or not len(index):
+        p.state = "finished"
+        p.message = "no insights export loaded — nothing to identify posts against"
+        return 0
 
-    targets = [
-        (run, idx, row, slot)
-        for run in runs
-        for idx, row in enumerate(run.rows)
-        for slot in ("fb1", "fb2", "fb3")
-        if row.links.get(slot) and row.cells[slot].value is None
-    ]
+    # Grouped by row, because the sibling shortcut is a per-row saving.
+    targets = []
+    for run in runs:
+        for row_idx, row in enumerate(run.rows):
+            slots = [s for s in FB_SLOTS
+                     if row.links.get(s) and row.cells[s].value is None]
+            if slots:
+                targets.append((run, row_idx, row, slots))
     if limit is not None:
         targets = targets[:limit]
     p.total = len(targets)
     if not targets:
-        p.state, p.message = "finished", "no missing Facebook cells"
+        p.state, p.message = "finished", "every Facebook cell is already accounted for"
         return 0
 
     if pacer.dry_run:
-        for _run, _idx, row, slot in targets:
-            pacer.before_visit(row.links[slot])
+        for _run, _idx, row, slots in targets:
+            pacer.before_visit(row.links[slots[0]])
             p.done += 1
-        p.state, p.message = "finished", f"dry-run: would visit {p.total} posts"
+        p.state, p.message = "finished", f"dry-run: would visit up to {p.total} posts"
         return 0
 
-    filled = 0
+    groups, slot_pages = _by_slug(index), _slot_pages(runs, index)
+    filled = captions = 0
     try:
         with persistent_session("meta", headed=headed) as sess:
-            for run, idx, row, slot in targets:
+            for run, row_idx, row, slots in targets:
                 if p.stop_requested:
                     break
-                page = sess.page()
-                url = row.links[slot]
-                p.current = url
-                try:
-                    if "/share/" in url:
-                        url = resolve_share_link(page, url, pacer)
-                        row.links[slot] = url
-                        # A share/p link usually points at a post on one of the
-                        # user's own pages, so the export almost always has it —
-                        # this is the case that used to fall straight through to
-                        # an estimate for want of a resolved URL.
-                        hit = index.lookup(url) if index is not None else None
-                        if hit is not None:
-                            cell = cell_from_insights(hit)
+                anchor = None
+                # Subpages first: the main page is the one whose headline is most
+                # often rewritten, so anchoring elsewhere leaves the hardest cell
+                # to be recovered rather than depended on.
+                ordered = [s for s in REPAIR_SLOT_ORDER if s in slots]
+                for slot in ordered:
+                    if p.stop_requested:
+                        break
+                    if row.cells[slot].value is not None:
+                        continue        # a sibling pass already accounted for it
+                    url = row.links[slot]
+                    p.current = url
+                    try:
+                        page = sess.page()
+                        if is_share_link(url):
+                            url = resolve_share_link(page, url, pacer)
+                            row.links[slot] = url
+                            hit = index.lookup(url)
+                            cell = cell_from_insights(
+                                hit, how="matched by permalink after resolving the "
+                                         "share link") if hit else None
                             if cell is not None:
                                 row.cells[slot] = cell
                                 filled += 1
                                 p.filled = filled
                                 p.log(f"{tag(run)}row {row.no} {slot}: {cell.value:,} "
-                                      f"(insights export, resolved share)")
-                                _checkpoint(persist, run, idx, slot, cell, p)
-                                continue    # `finally` below still counts the visit
-                    cell, reactions, post_id = collect_fb_post(page, url, pacer)
-                    if not row.caption:
-                        cap = extract_caption(page)
-                        if cap:
-                            row.caption = cap
-                            p.log(f"{tag(run)}row {row.no}: caption recovered from the post")
+                                      "(export, via the resolved share link)")
+                                _checkpoint(persist, run, row_idx, slot, cell, p)
+                                continue
 
-                    # Meta's numeric post id is the one key shared with the
-                    # export. It rescues exactly the rows nothing else can:
-                    # mainpage posts, whose headline is rewritten so the
-                    # photocard caption never matches, and whose pfbid differs
-                    # between the sheet's link and the export.
-                    if cell.value is None and index is not None:
+                        _cell, _reactions, post_id = collect_fb_post(page, url, pacer)
                         hit = index.lookup_post_id(post_id)
-                        exact = cell_from_insights(hit) if hit else None
-                        if exact is not None:
-                            row.cells[slot] = exact
-                            filled += 1
-                            p.filled = filled
-                            p.log(f"{tag(run)}row {row.no} {slot}: {exact.value:,} "
-                                  f"(insights export, matched by post id)")
-                            _checkpoint(persist, run, idx, slot, exact, p)
+                        if hit is None:
+                            # og:description on a deleted or restricted post is
+                            # Facebook's boilerplate or the page bio, and the tab
+                            # title carries the page name — good enough to show a
+                            # human only when the sheet said nothing at all.
+                            if not row.caption:
+                                cap = extract_caption(page)
+                                if cap and refresh_caption(row, cap):
+                                    captions += 1
+                                    p.log(f"{tag(run)}row {row.no}: caption read "
+                                          "from the post")
+                            row_issue(run, row, [slot],
+                                      "the post could not be identified in the "
+                                      "insights export, so this cell stays empty")
                             continue
 
-                    if cell.value is not None:
-                        row.cells[slot] = cell
-                        filled += 1
-                        p.log(f"{tag(run)}row {row.no} {slot}: {cell.value:,} views")
-                        _checkpoint(persist, run, idx, slot, cell, p)
-                    elif reactions:
-                        # k fitted per reaction bucket when the export is loaded,
-                        # otherwise a fresh random multiplier for every cell
-                        est = estimate_views(reactions, k, k_table=k_table)
-                        if est.value is None:
-                            p.log(f"{tag(run)}row {row.no} {slot}: {est.note}")
-                        else:
-                            row.cells[slot] = est
+                        cell = cell_from_insights(hit, how=_BY_POST_ID)
+                        if cell is not None:
+                            row.cells[slot] = cell
                             filled += 1
-                            p.log(f"{tag(run)}row {row.no} {slot}: estimated "
-                                  f"{est.value:,} ({est.note})")
-                            _checkpoint(persist, run, idx, slot, est, p)
-                    else:
-                        p.log(f"{tag(run)}row {row.no} {slot}: {cell.note}")
-                except (BudgetExceeded, ChallengeDetected):
-                    raise
-                except Exception as exc:
-                    p.log(f"{tag(run)}row {row.no} {slot}: failed ({type(exc).__name__})")
-                finally:
-                    p.done += 1
-                p.filled = filled
-    except BudgetExceeded as exc:
-        p.state, p.message = "stopped", str(exc)
-        return filled
-    except ChallengeDetected as exc:
+                            p.filled = filled
+                            p.log(f"{tag(run)}row {row.no} {slot}: {cell.value:,} "
+                                  "(export, matched by post id)")
+                            _checkpoint(persist, run, row_idx, slot, cell, p)
+
+                        if anchor is None:
+                            anchor = hit
+                            was = refresh_caption(row, hit.title)
+                            if was:
+                                captions += 1
+                                p.log(f"{tag(run)}row {row.no}: caption refreshed "
+                                      "from the post")
+                                if persist_caption is not None:
+                                    try:
+                                        persist_caption(run, row_idx, slot, was,
+                                                        row.caption)
+                                    except Exception as exc:
+                                        log.warning("caption checkpoint failed for "
+                                                    "row_idx %s: %s", row_idx, exc)
+                            got = fill_row_from_anchor(run, row, row_idx, slot, hit,
+                                                       groups, slot_pages, index,
+                                                       persist=persist)
+                            if got:
+                                filled += got
+                                p.filled = filled
+                                p.log(f"{tag(run)}row {row.no}: {got} more cell(s) "
+                                      "from the same story on the other pages")
+                    except (BudgetExceeded, ChallengeDetected):
+                        raise
+                    except Exception as exc:
+                        p.log(f"{tag(run)}row {row.no} {slot}: failed "
+                              f"({type(exc).__name__})")
+                p.done += 1
+    except (BudgetExceeded, ChallengeDetected) as exc:
         p.state, p.message = "stopped", str(exc)
         return filled
     except Exception as exc:
-        log.exception("fb collection aborted")
+        log.exception("facebook resolution aborted")
         p.state, p.message = "error", f"{type(exc).__name__}: {exc}"
         return filled
+    tail = (f"filled {filled} Facebook cells and refreshed {captions} captions "
+            f"over {p.done} rows")
     if p.stop_requested:
-        p.state, p.message = "stopped", f"stopped — filled {filled} of {p.done} visited"
+        p.state, p.message = "stopped", f"stopped — {tail}"
     else:
-        p.state = "finished"
-        p.message = f"filled {filled} of {p.total} Facebook cells"
+        p.state, p.message = "finished", tail
     return filled
 
 
-def collect_instagram(result: RunResult | list[RunResult], k: float | None = None,
-                      pacer: Pacer | None = None,
+def collect_instagram(result: RunResult | list[RunResult], pacer: Pacer | None = None,
                       headed: bool = False, progress: ProgressCb = None,
                       limit: int | None = None, persist: PersistCb = None) -> int:
     """Fill missing Instagram cells from post pages via the user's Meta
-    session (same persistent profile as Facebook). Reels carry a real view
-    count; photo posts fall back to likes × k estimation, marked ≈."""
+    session (same persistent profile as Facebook).
+
+    Only for what the Instagram export could not account for — which is little,
+    since an Instagram shortcode joins the export exactly. Reels carry a real
+    view count; a photo post that shows none leaves the cell empty rather than
+    inferring one from its likes."""
     from .browser import persistent_session
     from .instagram import collect_ig_post, extract_ig_caption
 
@@ -312,13 +359,6 @@ def collect_instagram(result: RunResult | list[RunResult], k: float | None = Non
                         filled += 1
                         p.log(f"{tag(run)}row {row.no}: {cell.value:,} views")
                         _checkpoint(persist, run, idx, "ig", cell, p)
-                    elif likes:
-                        # k=None -> a fresh random multiplier for every cell
-                        row.cells["ig"] = estimate_views(likes, k)
-                        filled += 1
-                        p.log(f"{tag(run)}row {row.no}: estimated "
-                              f"{row.cells['ig'].value:,} ({row.cells['ig'].note})")
-                        _checkpoint(persist, run, idx, "ig", row.cells["ig"], p)
                     else:
                         p.log(f"{tag(run)}row {row.no}: {cell.note}")
                 except (BudgetExceeded, ChallengeDetected):

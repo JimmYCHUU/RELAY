@@ -24,6 +24,18 @@ Observed permalink shapes, in descending frequency on a real export:
     facebook.com/<page>/posts/<pfbid…>          the overwhelming majority
     facebook.com/<page>/<numeric-id>/           a small remainder
     facebook.com/<page>/videos/<numeric-id>/    videos only
+
+Campaign sheets carry two further shapes the export never does, because they are
+what Facebook's own "Copy link" buttons hand out:
+
+    facebook.com/share/p/<short>/               mobile share sheet
+    facebook.com/photo/?fbid=<id>&set=…         desktop photo lightbox
+
+Neither names its page in the path. The lightbox's `set=pb.<page-id>` variant
+names it in the query, and `page_slug()` recovers it there — as a numeric id,
+which the export can translate to its vanity slug. The `set=a.<album-id>`
+variant and every share link carry no page at all: `page_slug()` returns None
+and `resolve.insights_fill` infers the page from the rest of the sheet.
 """
 from __future__ import annotations
 
@@ -39,9 +51,31 @@ _FB_HOSTS = ("facebook.com", "fb.com", "fb.me")
 _PFBID = re.compile(r"^pfbid[A-Za-z0-9]+$")
 _NUMERIC_ID = re.compile(r"^\d{6,}$")
 
+# Instagram's shortcode, the opposite of a pfbid: the same post carries the same
+# code in a copied link and in Meta's export, so `ig_shortcode` is an exact join
+# and Instagram never needs the browser visit Facebook does.
+_IG_SHORTCODE = re.compile(
+    r"instagram\.com/(?:[^/]+/)?(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", re.I)
+
+
+def ig_shortcode(url: str | None) -> str | None:
+    """The post's shortcode from an instagram.com URL, or None.
+
+    Tolerates the tracking suffix the app's copy-link button appends
+    (`?utm_source=ig_web_copy_link&…`), a trailing slash, and the
+    `/<account>/reel/<code>` form as well as the bare `/p/<code>`.
+    """
+    hit = _IG_SHORTCODE.search((url or "").strip())
+    return hit.group(1) if hit else None
+
 # Path segments that are route furniture, never the post's identity.
 _ROUTE_WORDS = {"posts", "videos", "video", "photos", "photo", "reel", "reels",
-                "permalink.php", "story.php", "watch", "p", "pfbid"}
+                "permalink.php", "story.php", "photo.php", "watch", "p", "pfbid"}
+
+# The lightbox's `set` parameter: "pb.<page-id>.-2207520000" names the page,
+# "a.<album-id>" names only an album and tells us nothing about the page.
+_PHOTO_SET_PAGE = re.compile(r"^pb\.(\d{6,})\b")
+_PHOTO_ROUTES = ("photo", "photo.php")
 
 
 def is_share_link(url: str | None) -> bool:
@@ -74,6 +108,13 @@ def _host_and_path(url: str) -> tuple[str, list[str]] | None:
         page = (q.get("id") or [None])[0]
         if story:
             segments = ([page] if page else []) + ["posts", story]
+    # /photo/?fbid=<id>&set=pb.<page-id> — the desktop lightbox, likewise
+    elif segments and segments[-1] in _PHOTO_ROUTES:
+        fbid = (parse_qs(parts.query).get("fbid") or [None])[0]
+        if fbid:
+            page = _PHOTO_SET_PAGE.match(
+                (parse_qs(parts.query).get("set") or [""])[0])
+            segments = ([page.group(1)] if page else []) + ["photos", fbid]
     return host, segments
 
 
@@ -101,16 +142,23 @@ def page_slug(url: str | None) -> str | None:
 
     Used to scope the caption fallback in `resolve.insights_fill` so a post can
     only ever be matched against rows from its own page.
+
+    The page is always the *first* path segment. A URL that opens with route
+    furniture instead names no page — `/photo/?fbid=…&set=a.<album>` and a
+    page-less `permalink.php?story_fbid=…` both do — and returns None rather
+    than the post id that follows, which would scope the caption fallback to a
+    page that does not exist.
     """
     parsed = _host_and_path(url or "")
     if not parsed:
         return None
     _, segments = parsed
-    for seg in segments:
-        if seg in _ROUTE_WORDS or _PFBID.match(seg):
-            continue
-        return seg.lower()
-    return None
+    if not segments:
+        return None
+    head = segments[0]
+    if head in _ROUTE_WORDS or _PFBID.match(head):
+        return None
+    return head.lower()
 
 
 def normalize_fb_url(url: str | None) -> str | None:

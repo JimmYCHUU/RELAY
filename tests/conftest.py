@@ -8,8 +8,8 @@ sys.path.insert(0, str(ROOT))
 
 SAMPLES = ROOT
 
-# The sample workbooks are the client's own files: sponsor campaign sheets, the
-# supervisor's matched files and a real Business Suite export. They are
+# The sample workbooks are the client's own files: sponsor campaign sheets and
+# real Business Suite exports. They are
 # git-ignored, and so are their *names* — a filename like
 # "<sponsor> FB Photocard (April).xlsx" identifies the sponsor on its own.
 #
@@ -37,16 +37,14 @@ def local_value(attr: str, default=None):
 
 CAMPAIGN = _sample("CAMPAIGN")
 REPORT_APRIL = _sample("REPORT_APRIL")
-WP_MAIN = _sample("MAINPAGE_MATCHED")
-WP_SUB = _sample("SUBPAGE_MATCHED")
-WP_INSTA = _sample("INSTA_MATCHED")
-ALL_MAIN_APRIL = _sample("ALL_MAIN_APRIL")
-ALL_MAIN_PENDING = _sample("ALL_MAIN_PENDING")
-ALL_SUB_PENDING = _sample("ALL_SUB_PENDING")
 # A real Business Suite content export. Like the workbooks above it holds live
 # data, so tests that use it skip when it is absent — the synthetic fixtures in
 # test_insights.py cover the same behaviour without it.
 INSIGHTS_EXPORT = _sample("INSIGHTS_EXPORT")
+# The Facebook export covering the same month as CAMPAIGN's April tab. Every
+# figure in `april_result` comes from here, so it is what the acceptance tests
+# measure against — the supervisor matched files it used to use are gone.
+INSIGHTS_APRIL = _sample("INSIGHTS_APRIL")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -78,7 +76,5 @@ def april_campaign():
 @pytest.fixture(scope="session")
 def april_result():
     from relay.pipeline import run_pipeline
-    return run_pipeline(
-        CAMPAIGN, "April", "Brand A",
-        mainpage_path=WP_MAIN, subpage_path=WP_SUB, insta_path=WP_INSTA,
-    )
+    return run_pipeline(CAMPAIGN, "April", "Brand A",
+                        insights_paths=[INSIGHTS_APRIL] if INSIGHTS_APRIL else None)

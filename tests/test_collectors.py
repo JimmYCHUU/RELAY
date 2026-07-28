@@ -179,12 +179,31 @@ def test_extract_reactions_routing_story_id_wins():
     assert extract_reactions(html) == 657
 
 
+def test_strict_story_id_refuses_the_stream_ordered_fallback():
+    """The id `collect_fb_post` hands back is joined straight to the insights
+    export, so it may only ever come from the routing storyID. The `post_id`
+    fallback is order-dependent — fine for anchoring a reactions window, where a
+    wrong guess merely finds no total, but a wrong export join prints another
+    story's Views into a sponsor report."""
+    import base64
+
+    from relay.collectors.mbs import _target_story_id
+
+    b64 = base64.b64encode(b"S:_I100064517327464:1499487785545118:1499487785545118").decode()
+    assert _target_story_id(f'"storyID":"{b64}"', strict=True) == "1499487785545118"
+
+    # no routing storyID: the loose caller still gets an anchor, the export join gets nothing
+    only_post_id = '"post_id":"38447510704847780"'
+    assert _target_story_id(only_post_id) == "38447510704847780"
+    assert _target_story_id(only_post_id, strict=True) is None
+
+
 def test_dry_run_collect_no_browser(april_result):
     """Dry run must never launch Playwright (browser import sits after the guard)."""
-    from relay.collectors.runner import Progress, collect_facebook, collect_x
+    from relay.collectors.runner import Progress, collect_x, resolve_facebook
     p = Pacer(dry_run=True)
     prog = Progress()
-    filled = collect_facebook(april_result, k=95, pacer=p, progress=prog)
+    filled = resolve_facebook(april_result, pacer=p, progress=prog)
     assert filled == 0 and p.visits > 0
     assert prog.state == "finished" and prog.done == prog.total > 0
     p2 = Pacer(dry_run=True)
@@ -381,66 +400,12 @@ def _one_row_run(link):
     return RunResult(brand="B", month="July", rows=[row])
 
 
-def test_resolved_share_prefers_the_export_over_an_estimate(monkeypatch, tmp_path):
-    """The exact case the multiplier was invented for: a share/p link. Once
-    resolved, the export almost always has it — and must win."""
-    from relay.collectors.runner import collect_facebook
-    from relay.ingest.insights import build_index
-
-    canonical = "https://www.facebook.com/somoysongbad360/posts/pfbid0CCC"
-    csv = tmp_path / "e.csv"
-    csv.write_text(
-        '"Post ID",Permalink,Views,Reach,Reactions\n'
-        f'1003,{canonical},4611,2892,5\n', encoding="utf-8-sig")
-
-    run = _one_row_run("https://www.facebook.com/share/p/abc/")
-    run.insights = build_index([csv])
-    _patch_fb_collector(monkeypatch, views=None, reactions=5, resolved=canonical)
-
-    p, _ = make_pacer(budget=10)
-    assert collect_facebook(run, pacer=p) == 1
-    cell = run.rows[0].cells["fb1"]
-    assert cell.value == 4611 and cell.provenance == "collected"   # Views
-    assert "insights export" in cell.note
-
-
-def test_estimate_fires_only_when_the_export_has_nothing(monkeypatch, tmp_path):
-    from relay.collectors.runner import collect_facebook
-    from relay.ingest.insights import build_index
-
-    csv = tmp_path / "e.csv"
-    csv.write_text(
-        '"Post ID",Permalink,Views,Reach,Reactions\n'
-        '1,https://www.facebook.com/other/posts/pfbid0ZZZ,100,90,1\n',
-        encoding="utf-8-sig")
-
-    run = _one_row_run("https://www.facebook.com/share/p/abc/")
-    run.insights = build_index([csv])
-    _patch_fb_collector(monkeypatch, views=None, reactions=40,
-                        resolved="https://www.facebook.com/mine/posts/pfbid0QQQ")
-
-    p, _ = make_pacer(budget=10)
-    assert collect_facebook(run, pacer=p) == 1
-    assert run.rows[0].cells["fb1"].provenance == "estimated"
-
-
-def test_zero_reaction_post_is_left_missing_not_zeroed(monkeypatch):
-    """A share with no reactions used to produce 0. A blank is honest; 0 is not."""
-    from relay.collectors.runner import collect_facebook
-
-    run = _one_row_run("https://www.facebook.com/mine/posts/pfbid0AAA")
-    _patch_fb_collector(monkeypatch, views=None, reactions=0)
-
-    p, _ = make_pacer(budget=10)
-    assert collect_facebook(run, pacer=p) == 0
-    assert run.rows[0].cells["fb1"].value is None
-
 
 def test_post_id_join_rescues_a_mainpage_post(monkeypatch, tmp_path):
     """Mainpage posts rewrite the photocard's headline and carry a different
     pfbid from the export, so neither caption nor URL can join them. Meta's
     numeric post id — read off the live page — is the only key that works."""
-    from relay.collectors.runner import collect_facebook
+    from relay.collectors.runner import resolve_facebook
     from relay.ingest.insights import build_index
 
     csv = tmp_path / "e.csv"
@@ -456,14 +421,39 @@ def test_post_id_join_rescues_a_mainpage_post(monkeypatch, tmp_path):
     _patch_fb_collector(monkeypatch, views=None, reactions=1126, post_id="778899")
 
     p, _ = make_pacer(budget=10)
-    assert collect_facebook(run, pacer=p) == 1
+    assert resolve_facebook(run, pacer=p) == 1
     cell = run.rows[0].cells["fb1"]
     assert cell.value == 161460 and cell.provenance == "collected"
     assert "778899" in cell.note
 
 
-def test_post_id_join_is_skipped_when_the_export_lacks_the_id(monkeypatch, tmp_path):
-    from relay.collectors.runner import collect_facebook
+def test_the_exports_exact_figure_beats_the_scraped_compact_one(monkeypatch, tmp_path):
+    """A post page shows "45.2K", and `parse_compact_number` has to invent the
+    digits it hides. The export carries Meta's own integer for the same post, so
+    whenever the post id joins, that wins — a figure the sponsor can trace back
+    to a row in the export beats one RELAY rounded off a screen."""
+    from relay.collectors.runner import resolve_facebook
+    from relay.ingest.insights import build_index
+
+    csv = tmp_path / "e.csv"
+    csv.write_text(
+        '"Post ID",Permalink,Title,Views,Reach,Reactions\n'
+        '778899,https://www.facebook.com/somoynews.tv/posts/pfbid0DIFFERENT,"t",45210,30000,900\n',
+        encoding="utf-8-sig")
+
+    run = _one_row_run("https://www.facebook.com/somoynews.tv/posts/pfbid0FROMSHEET")
+    run.insights = build_index([csv])
+    _patch_fb_collector(monkeypatch, views=45237, reactions=900, post_id="778899")
+
+    p, _ = make_pacer(budget=10)
+    assert resolve_facebook(run, pacer=p) == 1
+    cell = run.rows[0].cells["fb1"]
+    assert cell.value == 45210, "Meta's integer, not the de-rounded screen figure"
+    assert "insights export" in cell.note
+
+
+def test_a_post_missing_from_the_export_leaves_a_blank(monkeypatch, tmp_path):
+    from relay.collectors.runner import resolve_facebook
     from relay.ingest.insights import build_index
 
     csv = tmp_path / "e.csv"
@@ -477,5 +467,27 @@ def test_post_id_join_is_skipped_when_the_export_lacks_the_id(monkeypatch, tmp_p
     _patch_fb_collector(monkeypatch, views=None, reactions=40, post_id="999")
 
     p, _ = make_pacer(budget=10)
-    assert collect_facebook(run, pacer=p) == 1
-    assert run.rows[0].cells["fb1"].provenance == "estimated"
+    assert resolve_facebook(run, pacer=p) == 0, "no export row, so no value at all"
+    assert run.rows[0].cells["fb1"].value is None
+
+
+def test_tab_title_badge_and_page_name_are_not_the_caption():
+    """A logged-in tab reads "(20+) somoynews.tv - <caption> | Facebook". Only
+    the trailing site name used to be stripped, so the unread badge and the page
+    name were written into a report as if they were the post's own words."""
+    from relay.collectors.mbs import clean_page_title
+
+    assert clean_page_title(
+        "(20+) somoynews.tv - অস্ট্রেলিয়ার বিপক্ষে প্রথমবারের মতো ওয়ানডে সিরিজ | Facebook"
+    ) == "অস্ট্রেলিয়ার বিপক্ষে প্রথমবারের মতো ওয়ানডে সিরিজ"
+    assert clean_page_title("(3) Somoy Sports - কিছু একটা | Facebook") == "কিছু একটা"
+    # a caption with no chrome around it survives untouched
+    assert clean_page_title("অস্ট্রেলিয়ার বিপক্ষে সিরিজ") == "অস্ট্রেলিয়ার বিপক্ষে সিরিজ"
+    # a Bengali caption may carry its own " - "; cutting at the first dash would
+    # throw half of it away, so only a Latin-script page name is stripped
+    assert clean_page_title("(2) somoynews.tv - আর্জেন্টিনা - সুইজারল্যান্ড | Facebook") \
+        == "আর্জেন্টিনা - সুইজারল্যান্ড"
+    # nothing recognisable left is None, never a page name passed off as a caption
+    assert clean_page_title("(20+) Facebook") is None
+    assert clean_page_title("") is None
+    assert clean_page_title(None) is None

@@ -16,7 +16,6 @@ from ..models import RunResult
 from ..pipeline import run_pipeline
 from ..report.crosscheck import compare, parse_reference
 from ..report.generator import build_report
-from ..resolve.heuristic import apply_estimate
 
 app = FastAPI(title="RELAY", version="1.0.0")
 
@@ -74,13 +73,13 @@ def _serialize(run_id: str, result: RunResult) -> dict:
         "month": result.month,
         "coverage": result.coverage(),
         "issues": [vars(i) for i in result.issues],
-        "tiers": result.match_tiers,
         "insights": _insights_summary(result),
         "rows": [
             {
                 "no": r.no,
                 "date": r.date.isoformat() if r.date else None,
                 "caption": r.caption,
+                "original_caption": r.original_caption,
                 "links": r.links,
                 "cells": {
                     s: {
@@ -116,12 +115,11 @@ class RunReq(BaseModel):
     campaign: str
     sheet: str
     brand: str
-    mainpage: str | None = None
-    subpage: str | None = None
-    insta: str | None = None
-    # One Business Suite content export per page — exact Reach/Views, matched
-    # to campaign rows by permalink rather than caption.
+    # Meta's own content exports — the source of essentially every figure.
+    # Facebook joins by link, caption or post id; Instagram joins exactly by the
+    # post's shortcode, which is stable between a copied link and the export.
     insights: list[str] = Field(default_factory=list)
+    ig_insights: list[str] = Field(default_factory=list)
 
 
 @app.post("/api/run")
@@ -129,8 +127,8 @@ def run(req: RunReq) -> dict:
     try:
         result = run_pipeline(
             req.campaign, req.sheet, req.brand,
-            mainpage_path=req.mainpage, subpage_path=req.subpage, insta_path=req.insta,
             insights_paths=list(req.insights) or None,
+            ig_insights_paths=list(req.ig_insights) or None,
         )
     except (ValueError, FileNotFoundError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -164,12 +162,6 @@ class CellReq(BaseModel):
     slot: str = Field(pattern="^(fb1|fb2|fb3|x|ig)$")
 
 
-class EstimateReq(CellReq):
-    reactions: int = Field(ge=0)
-    # None -> a fresh random k per estimated cell (the default behaviour)
-    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
-
-
 class OverrideReq(CellReq):
     value: int | None
 
@@ -179,27 +171,6 @@ def _find_row(result: RunResult, row_no: int):
         if r.no == row_no:
             return r
     raise HTTPException(404, f"row {row_no} not found")
-
-
-@app.post("/api/estimate")
-def estimate(req: EstimateReq) -> dict:
-    result = _get_run(req.run_id)
-    row = _find_row(result, req.row_no)
-    k_table = None
-    index = getattr(result, "insights", None)
-    if index is not None and len(index):
-        from ..resolve.insights_fill import fit_k_table
-        k_table = fit_k_table(index)
-    try:
-        row.cells[req.slot] = apply_estimate(row.cells[req.slot], req.reactions,
-                                             req.k, k_table=k_table)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    c = row.cells[req.slot]
-    store.record_override(_run_db_ids[req.run_id], req.row_no, req.slot,
-                          None, c.value, cell=c)
-    return {"value": c.value, "provenance": c.provenance, "confidence": c.confidence,
-            "note": c.note}
 
 
 @app.post("/api/override")
@@ -217,8 +188,6 @@ def override(req: OverrideReq) -> dict:
 class BatchCollectReq(BaseModel):
     run_ids: list[str] = Field(min_length=1)
     target: str = Field(pattern="^(x|fb|ig)$")
-    # None -> a fresh random k per estimated cell (the default behaviour)
-    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
     dry_run: bool = False
 
 
@@ -236,9 +205,8 @@ def collect_batch(req: BatchCollectReq) -> dict:
     import threading
 
     from ..collectors.base import Pacer
-    from ..collectors.runner import (Progress, collect_facebook,
-                                     collect_instagram, collect_x,
-                                     meta_profile_exists)
+    from ..collectors.runner import (Progress, collect_instagram, collect_x,
+                                     meta_profile_exists, resolve_facebook)
 
     results = [_get_run(rid) for rid in req.run_ids]
     existing = _batch_jobs.get(req.target)
@@ -246,7 +214,8 @@ def collect_batch(req: BatchCollectReq) -> dict:
         raise HTTPException(409, "collection already running for this target")
     if _autopilot_running():
         raise HTTPException(409, "autopilot is running — stop it first")
-    if req.target in ("fb", "ig") and not req.dry_run and not meta_profile_exists():
+    if req.target in ("fb", "ig") and not req.dry_run \
+            and not meta_profile_exists():
         raise HTTPException(412, "meta-session-required")
 
     progress = Progress()
@@ -261,11 +230,11 @@ def collect_batch(req: BatchCollectReq) -> dict:
             collect_x(results, pacer=pacer, progress=progress, persist=persist)
         elif req.target == "ig":
             pacer = Pacer(dry_run=req.dry_run)
-            collect_instagram(results, req.k, pacer=pacer, progress=progress,
+            collect_instagram(results, pacer=pacer, progress=progress,
                               persist=persist)
         else:
             pacer = Pacer(dry_run=req.dry_run)
-            collect_facebook(results, req.k, pacer=pacer, progress=progress,
+            resolve_facebook(results, pacer=pacer, progress=progress,
                              persist=persist)
 
     threading.Thread(target=work, daemon=True, name=f"collect-batch-{req.target}").start()
@@ -297,8 +266,6 @@ def collect_batch_stop(target: str) -> dict:
 
 class AutopilotReq(BaseModel):
     run_ids: list[str] = Field(min_length=1)
-    # None -> a fresh random k per estimated cell (the default behaviour)
-    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
     dry_run: bool = False
 
 
@@ -334,9 +301,8 @@ def autopilot_start(req: AutopilotReq) -> dict:
     import threading
 
     from ..collectors.base import Pacer
-    from ..collectors.runner import (Progress, collect_facebook,
-                                     collect_instagram, collect_x,
-                                     meta_profile_exists)
+    from ..collectors.runner import (Progress, collect_instagram, collect_x,
+                                     meta_profile_exists, resolve_facebook)
 
     global _autopilot_job
     results = [_get_run(rid) for rid in req.run_ids]
@@ -367,12 +333,12 @@ def autopilot_start(req: AutopilotReq) -> dict:
     collectors = {
         "x": lambda res, sub: collect_x(res, pacer=pacers["x"], progress=sub,
                                         persist=persist),
-        "fb": lambda res, sub: collect_facebook(res, req.k, pacer=pacers["fb"],
+        "fb": lambda res, sub: resolve_facebook(res, pacer=pacers["fb"],
                                                 progress=sub, persist=persist),
-        "ig": lambda res, sub: collect_instagram(res, req.k, pacer=pacers["ig"],
+        "ig": lambda res, sub: collect_instagram(res, pacer=pacers["ig"],
                                                  progress=sub, persist=persist),
     }
-    labels = {"x": "X", "fb": "Facebook", "ig": "Instagram"}
+    labels = {"fb": "Facebook", "ig": "Instagram", "x": "X"}
 
     def work():
         filled = 0
@@ -381,7 +347,10 @@ def autopilot_start(req: AutopilotReq) -> dict:
                 if job.stop_requested:
                     break
                 job.campaign_idx, job.brand = idx, result.brand
-                for target in ("x", "fb", "ig"):
+                # Facebook first: it is the pass that identifies posts and
+                # refreshes stale captions, so everything after it works from a
+                # row that already describes itself correctly.
+                for target in ("fb", "ig", "x"):
                     if job.stop_requested:
                         break
                     sub = Progress()
@@ -454,8 +423,7 @@ def generate_batch(req: BatchReportReq) -> dict:
     paths = []
     for rid, result in zip(req.run_ids, results):
         out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
-        build_report(result, out, estimate_comments=req.comments,
-                     campaign_path=_run_inputs.get(rid, {}).get("campaign"))
+        build_report(result, out)
         store.set_output(_run_db_ids[rid], str(out))
         paths.append(out)
     month = results[0].month
@@ -480,8 +448,7 @@ def download_batch(name: str):
 def generate(run_id: str, comments: bool = True) -> dict:
     result = _get_run(run_id)
     out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
-    build_report(result, out, estimate_comments=comments,
-                 campaign_path=_run_inputs.get(run_id, {}).get("campaign"))
+    build_report(result, out)
     store.set_output(_run_db_ids[run_id], str(out))
     return {"path": str(out), "name": out.name}
 
@@ -546,8 +513,6 @@ def meta_login_status() -> dict:
 class CollectReq(BaseModel):
     run_id: str
     target: str = Field(pattern="^(x|fb|ig)$")
-    # None -> a fresh random k per estimated cell (the default behaviour)
-    k: float | None = Field(default=None, ge=config.K_MIN, le=config.K_MAX)
     dry_run: bool = False
 
 
@@ -559,9 +524,8 @@ def collect(req: CollectReq) -> dict:
     import threading
 
     from ..collectors.base import Pacer
-    from ..collectors.runner import (Progress, collect_facebook,
-                                     collect_instagram, collect_x,
-                                     meta_profile_exists)
+    from ..collectors.runner import (Progress, collect_instagram, collect_x,
+                                     meta_profile_exists, resolve_facebook)
 
     result = _get_run(req.run_id)
     key = (req.run_id, req.target)
@@ -570,7 +534,8 @@ def collect(req: CollectReq) -> dict:
         raise HTTPException(409, "collection already running for this run")
     if _autopilot_running():
         raise HTTPException(409, "autopilot is running — stop it first")
-    if req.target in ("fb", "ig") and not req.dry_run and not meta_profile_exists():
+    if req.target in ("fb", "ig") and not req.dry_run \
+            and not meta_profile_exists():
         # 412 → the dashboard auto-opens the sign-in browser via /api/login/meta
         raise HTTPException(412, "meta-session-required")
 
@@ -585,11 +550,11 @@ def collect(req: CollectReq) -> dict:
             collect_x(result, pacer=pacer, progress=progress, persist=persist)
         elif req.target == "ig":
             pacer = Pacer(dry_run=req.dry_run)
-            collect_instagram(result, req.k, pacer=pacer, progress=progress,
+            collect_instagram(result, pacer=pacer, progress=progress,
                               persist=persist)
         else:
             pacer = Pacer(dry_run=req.dry_run)
-            collect_facebook(result, req.k, pacer=pacer, progress=progress,
+            resolve_facebook(result, pacer=pacer, progress=progress,
                              persist=persist)
 
     threading.Thread(target=work, daemon=True, name=f"collect-{req.target}").start()
