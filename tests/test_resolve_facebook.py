@@ -199,7 +199,7 @@ def test_an_unidentifiable_post_never_silently_rewrites_the_caption(tmp_path, mo
     assert filled == 0
     assert run.rows[0].caption == SHEET_CAPTION, "untouched"
     assert run.rows[0].original_caption == ""
-    assert any("could not be identified" in i.reason for i in run.issues)
+    assert any("its id is in none of" in i.reason for i in run.issues)
 
 
 def test_refresh_caption_is_idempotent():
@@ -334,7 +334,7 @@ def test_nothing_is_ever_estimated(tmp_path, monkeypatch):
     assert resolve_facebook(run, pacer=pacer, progress=Progress()) == 0
     cell = run.rows[0].cells["fb1"]
     assert cell.value is None and cell.provenance == "missing"
-    assert any("could not be identified" in i.reason for i in run.issues)
+    assert any("its id is in none of" in i.reason for i in run.issues)
 
 
 def test_one_visit_settles_a_whole_cross_posted_row(tmp_path, monkeypatch):

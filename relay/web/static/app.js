@@ -646,7 +646,6 @@ function openCellEditor(rowNo, slot) {
   const link = $("#cellLink");
   link.hidden = !row.links[slot];
   if (row.links[slot]) link.href = row.links[slot];
-  $("#reactions").value = "";
   $("#manualValue").value = c.value ?? "";
   dialog.showModal();
 }

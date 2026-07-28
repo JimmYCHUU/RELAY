@@ -157,9 +157,9 @@ def resolve_facebook(result: RunResult | list[RunResult], pacer: Pacer | None = 
     identified, the export's title is what it actually says now.
     """
     from ..resolve.insights_fill import (FB_SLOTS, REPAIR_SLOT_ORDER, _by_slug,
-                                         _slot_pages, cell_from_insights,
-                                         fill_row_from_anchor, refresh_caption,
-                                         row_issue)
+                                         _slot_pages, _slug_for,
+                                         cell_from_insights, fill_row_from_anchor,
+                                         refresh_caption, row_issue)
     from ..matching.permalink import is_share_link
     from .browser import persistent_session
     from .mbs import collect_fb_post, extract_caption, resolve_share_link
@@ -247,9 +247,13 @@ def resolve_facebook(result: RunResult | list[RunResult], pacer: Pacer | None = 
                                     captions += 1
                                     p.log(f"{tag(run)}row {row.no}: caption read "
                                           "from the post")
+                            slug = _slug_for(url, index)
                             row_issue(run, row, [slot],
-                                      "the post could not be identified in the "
-                                      "insights export, so this cell stays empty")
+                                      f"none of the supplied exports cover {slug} — "
+                                      "no post id can resolve a page that is not there"
+                                      if slug and not index.covers(slug) else
+                                      "the post was reached but its id is in none of "
+                                      "the supplied exports, so this cell stays empty")
                             continue
 
                         cell = cell_from_insights(hit, how=_BY_POST_ID)

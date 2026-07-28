@@ -614,3 +614,49 @@ def test_one_index_serves_both_exports(tmp_path):
     # neither join answers for the other platform's URLs
     assert index.lookup_ig(f"{PAGE}pfbid0AAA") is None
     assert index.lookup("https://www.instagram.com/p/DaL7buhEzbR/") is None
+
+
+def test_an_unaccounted_cell_says_it_needs_a_post_visit(tmp_path):
+    """"awaiting the insights export" is what a cell says before one has been
+    consulted. Left there after a fill it reads as "you have not supplied the
+    file", when the real reason is usually that Meta recorded no caption for the
+    post — 26.7% of a real month's main-page rows carry a blank Title."""
+    from relay.resolve.insights_fill import note_unaccounted
+
+    index = build_index([_csv(tmp_path, ROWS)])
+    run = _sheet([({"fb1": f"{PAGE}pfbid0NOTHERE"}, "একটি ক্যাপশন যা কোথাও মেলে না",
+                   datetime(2026, 7, 4))])
+    run.rows[0].links["ig"] = "https://www.instagram.com/p/NOTINEXPORT/"
+    # the placeholders rules.build_row leaves before any export is consulted
+    run.rows[0].cells["fb1"] = CellValue.missing("awaiting the insights export")
+    run.rows[0].cells["ig"] = CellValue.missing("awaiting the Instagram export")
+
+    assert note_unaccounted(run) == 2
+    assert "identify it by its post id" in run.rows[0].cells["fb1"].note
+    assert "no row for this post" in run.rows[0].cells["ig"].note
+    # idempotent, and a cell that already explains itself is left alone
+    run.rows[0].cells["fb1"].note = "something more specific"
+    assert note_unaccounted(run) == 0
+    assert run.rows[0].cells["fb1"].note == "something more specific"
+
+
+def test_a_page_no_export_covers_is_named_outright(tmp_path):
+    """The June sheet links somoytechnews and drishshopot, and neither page is
+    in the export at all. No caption and no post id can resolve those — the only
+    fix is to export the page, so the run says which page and how many links."""
+    from relay.resolve.insights_fill import note_unaccounted, uncovered_pages
+
+    index = build_index([_csv(tmp_path, ROWS)])          # somoysongbad360 only
+    run = _sheet([({"fb1": f"{PAGE}pfbid0A",
+                    "fb2": "https://www.facebook.com/somoytechnews/posts/pfbid0B"},
+                   "একটি ক্যাপশন যা কোথাও মেলে না", datetime(2026, 7, 4))])
+    assert index.covers("somoysongbad360") and not index.covers("somoytechnews")
+    assert uncovered_pages(run, index) == {"somoytechnews": 1}
+
+    for slot in ("fb1", "fb2"):
+        run.rows[0].cells[slot] = CellValue.missing("awaiting the insights export")
+    note_unaccounted(run, index)
+    # the covered page gets the "run the post-id pass" advice…
+    assert "identify it by its post id" in run.rows[0].cells["fb1"].note
+    # …the uncovered one is told the truth: nothing will ever fill it
+    assert "none of the supplied exports cover somoytechnews" in run.rows[0].cells["fb2"].note

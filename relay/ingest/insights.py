@@ -148,6 +148,10 @@ class InsightsIndex:
     # code in a copied Instagram link is the code in the export, so this join
     # needs no browser and no caption.
     by_shortcode: dict[str, InsightsRow] = field(default_factory=dict)
+    # Which pages the supplied exports actually cover. A campaign link to a page
+    # nobody exported can never be resolved by any means, and that is worth
+    # saying plainly rather than reporting as a post that wasn't found.
+    pages: set = field(default_factory=set)
     rows: list[InsightsRow] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     issues: list[RowIssue] = field(default_factory=list)
@@ -166,14 +170,20 @@ class InsightsIndex:
             if row.post_id:
                 self.by_post_id.setdefault(row.post_id, row)
             slug = page_slug(row.permalink)
-            if row.page_id and slug:
-                self.page_slugs.setdefault(row.page_id, slug)
+            if slug:
+                self.pages.add(slug)
+                if row.page_id:
+                    self.page_slugs.setdefault(row.page_id, slug)
             code = ig_shortcode(row.permalink)
             if code:
                 self.by_shortcode.setdefault(code, row)
 
     def slug_for_page_id(self, page_id: str | None) -> str | None:
         return self.page_slugs.get(str(page_id)) if page_id else None
+
+    def covers(self, slug: str | None) -> bool:
+        """Whether any supplied export contains this page at all."""
+        return bool(slug) and slug in self.pages
 
     def lookup_ig(self, url: str | None) -> InsightsRow | None:
         """Join an Instagram campaign link to its export row by shortcode."""

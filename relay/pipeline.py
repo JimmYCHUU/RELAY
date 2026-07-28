@@ -13,9 +13,10 @@ from typing import Optional
 
 from .ingest.campaign import parse_campaign
 from .ingest.insights import build_index
-from .models import RunResult
+from .models import RowIssue, RunResult
 from .resolve.insights_fill import (fill_from_insights,
-                                    fill_instagram_from_insights)
+                                    fill_instagram_from_insights,
+                                    note_unaccounted, uncovered_pages)
 from .resolve.rules import build_row
 
 
@@ -38,5 +39,17 @@ def run_pipeline(
     if len(result.insights):
         fill_from_insights(result, result.insights)
         fill_instagram_from_insights(result, result.insights)
+        # Whatever is still empty is now waiting on a post visit, not on a file
+        # the user has yet to supply — say so on the cell.
+        note_unaccounted(result, result.insights)
+        # And say it once at the run level for a page nothing can rescue: no
+        # post id resolves against a page that was never exported.
+        for slug, n in sorted(uncovered_pages(result, result.insights).items(),
+                              key=lambda kv: -kv[1]):
+            issues.append(RowIssue(
+                "insights exports", 0,
+                f"{n} link{'s' if n > 1 else ''} "
+                f"{'point' if n > 1 else 'points'} at {slug}, which none of the "
+                "supplied exports cover — export that page to fill them"))
 
     return result

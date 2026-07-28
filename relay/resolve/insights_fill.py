@@ -427,6 +427,60 @@ def fill_instagram_from_insights(result: RunResult | list[RunResult],
 
 
 
+def uncovered_pages(result: RunResult | list[RunResult],
+                    index: InsightsIndex) -> dict[str, int]:
+    """Pages the campaign links but no supplied export contains, and how many
+    links land on each. Nothing can resolve those cells — not the caption, not a
+    post id — so the only fix is to export that page, and the run should say so
+    once rather than leaving a per-row mystery."""
+    out: dict[str, int] = {}
+    for run in _as_runs(result):
+        for row in run.rows:
+            for slot in FB_SLOTS:
+                slug = _slug_for(row.links.get(slot), index)
+                if slug and not index.covers(slug):
+                    out[slug] = out.get(slug, 0) + 1
+    return out
+
+
+def note_unaccounted(result: RunResult | list[RunResult],
+                     index: InsightsIndex | None = None) -> int:
+    """Say why a linked cell is still empty, once the exports have had their turn.
+
+    Until this runs a cell reads "awaiting the insights export", which is what
+    `rules.build_row` sets *before* one has been consulted — and which reads,
+    wrongly, as "you have not supplied it yet". The commonest reason a supplied
+    export cannot account for a Facebook post is that Meta recorded no caption
+    for it: 26.7% of one real month's main-page rows carry a blank Title, most
+    of them shared or photo posts. No caption can find those and nothing is
+    wrong with the sheet — only the post's own id will do it.
+    """
+    changed = 0
+    for run in _as_runs(result):
+        for row in run.rows:
+            for slot in FB_SLOTS + ("ig",):
+                cell = row.cells[slot]
+                if not row.links.get(slot) or cell.value is not None:
+                    continue
+                if not cell.note.startswith("awaiting the "):
+                    continue        # something more specific already explains it
+                slug = _slug_for(row.links.get(slot), index) if index else None
+                if slot == "ig":
+                    cell.note = "the Instagram export has no row for this post"
+                elif index is not None and slug and not index.covers(slug):
+                    cell.note = (f"none of the supplied exports cover {slug} — "
+                                 "export that page and this cell fills itself; "
+                                 "no post id can rescue a page that is not there")
+                else:
+                    cell.note = (
+                        "the exports could not account for this post — its caption "
+                        "matches nothing on this page, which is normal for a shared "
+                        "or photo post Meta recorded no caption for. Resolve Facebook "
+                        "posts will identify it by its post id.")
+                changed += 1
+    return changed
+
+
 # --- caption repair: rows whose sheet caption no longer describes the post ---
 #
 # The campaign sheet is hand-maintained. Someone writes a caption and pastes the
