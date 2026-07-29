@@ -41,6 +41,10 @@
   --shadow: 0 1px 2px rgba(20,22,31,.04), 0 6px 24px rgba(20,22,31,.05);
   --shadow-lift: 0 4px 10px rgba(20,22,31,.07), 0 16px 40px rgba(20,22,31,.09);
   --shadow-tab: 0 1px 2px rgba(20,22,31,.08), 0 1px 4px rgba(20,22,31,.10);
+  /* motion — entering/exiting uses --ease-out; on-screen movement --ease-in-out.
+     Hover and colour changes deliberately keep the built-in `ease`. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234d5164' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 :root[data-theme="dark"] {
@@ -106,7 +110,10 @@ body {
 .error {
   color: var(--critical); font-size: 13.5px; background: var(--critical-soft);
   border-radius: 10px; padding: 10px 14px; margin-top: 12px;
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out);
 }
+.error.in { opacity: 1; transform: none; }
 
 /* ═════════ app frame: gray page · icon rail · floating panel ═════════ */
 .app { display: flex; gap: 10px; padding: 10px; min-height: 100vh; }
@@ -127,7 +134,7 @@ body {
   display: grid; place-items: center; width: 44px; height: 44px;
   background: none; border: 1px solid transparent; border-radius: 12px;
   cursor: pointer; color: var(--ink-2); font: inherit;
-  transition: background .12s, color .12s, border-color .12s, box-shadow .12s;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 .nav-item .ic-svg { width: 20px; height: 20px; }
 .nav-item:hover { background: var(--panel); color: var(--ink); }
@@ -164,7 +171,7 @@ body {
 .iconbtn {
   width: 38px; height: 38px; padding: 0; display: grid; place-items: center;
   background: var(--surface); border: 1px solid var(--baseline); border-radius: 10px;
-  color: var(--ink-2); cursor: pointer; transition: border-color .12s, color .12s;
+  color: var(--ink-2); cursor: pointer; transition: border-color 120ms ease, color 120ms ease;
 }
 .iconbtn:hover { border-color: var(--ink-2); color: var(--ink); }
 .range-pill {
@@ -200,7 +207,7 @@ button, a.ghost {
   font: inherit; font-weight: 650; border-radius: 10px; padding: 9px 16px;
   cursor: pointer; border: 1px solid transparent; text-decoration: none;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  transition: transform .1s, box-shadow .15s, background .15s, opacity .15s;
+  transition: transform 120ms var(--ease-out), box-shadow 150ms ease, background 150ms ease, opacity 150ms ease;
 }
 button .ic-svg, a.ghost .ic-svg { width: 16px; height: 16px; }
 button.lg, a.lg { padding: 12px 22px; font-size: 15px; }
@@ -208,7 +215,10 @@ button.primary {
   background: var(--accent); color: #fff;
   box-shadow: 0 4px 14px rgba(15,168,145,.30);
 }
-button.primary:not([disabled]):hover { background: var(--accent-strong); transform: translateY(-1px); }
+button.primary:not([disabled]):hover { background: var(--accent-strong); }
+@media (hover: hover) and (pointer: fine) {
+  button.primary:not([disabled]):hover { transform: translateY(-1px); }
+}
 button.primary[disabled] {
   background: var(--surface-2); color: var(--muted);
   cursor: not-allowed; box-shadow: none; border-color: var(--grid);
@@ -216,11 +226,16 @@ button.primary[disabled] {
 button.ghost, a.ghost { background: var(--surface); color: var(--ink); border-color: var(--baseline); }
 button.ghost:not([disabled]):hover, a.ghost:hover { border-color: var(--ink-2); }
 button.ghost[disabled] { opacity: .45; cursor: not-allowed; }
+/* press feedback — deliberately not on .cell-edit, which is pressed dozens of
+   times per correction pass */
+button.primary:not([disabled]):active,
+button.ghost:not([disabled]):active,
+a.ghost:active { transform: translateY(0) scale(0.97); }
 label { font-size: 12.5px; color: var(--ink-2); font-weight: 600; }
 input[type="text"], input[type="number"], select {
   background: var(--surface); color: var(--ink);
   border: 1px solid var(--baseline); border-radius: 10px; padding: 10px 12px; font: inherit;
-  min-width: 230px; transition: border-color .15s, box-shadow .15s;
+  min-width: 230px; transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 select {
   appearance: none; -webkit-appearance: none; cursor: pointer; font-weight: 600;
@@ -350,7 +365,7 @@ input:disabled, select:disabled {
   text-align: left; background: var(--surface); border: 1px solid var(--grid);
   border-radius: 12px; padding: 11px 13px; cursor: pointer; font: inherit; color: var(--ink);
   display: flex; flex-direction: column; align-items: stretch; gap: 7px;
-  transition: border-color .12s, box-shadow .12s;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 .rcard:hover { border-color: var(--baseline); }
 .rcard.selected {
@@ -392,7 +407,7 @@ input:disabled, select:disabled {
   display: inline-flex; align-items: center; gap: 5px; color: var(--muted);
   font-size: 12.5px; font-weight: 600; text-decoration: none;
   border: 1px solid var(--grid); border-radius: 8px; padding: 5px 10px;
-  transition: color .12s, border-color .12s;
+  transition: color 120ms ease, border-color 120ms ease;
 }
 .iconlink:hover { color: var(--accent); border-color: var(--accent); }
 .iconlink .ic-svg { width: 13px; height: 13px; }
@@ -522,10 +537,15 @@ input:disabled, select:disabled {
   display: flex; gap: 13px; align-items: flex-start;
   background: var(--surface); border: 1.5px dashed var(--baseline); border-radius: 14px;
   padding: 16px; cursor: pointer;
-  transition: border-color .15s, transform .12s, box-shadow .15s;
+  transition: border-color 150ms ease, transform 120ms ease, box-shadow 150ms ease;
 }
 .drop:hover, .drop.dragover, .drop:focus-visible {
-  border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-lift); outline: none;
+  border-color: var(--accent); box-shadow: var(--shadow-lift); outline: none;
+}
+/* drag-over and keyboard focus are not hovers — they lift on every device */
+.drop.dragover, .drop:focus-visible { transform: translateY(-1px); }
+@media (hover: hover) and (pointer: fine) {
+  .drop:hover { transform: translateY(-1px); }
 }
 .drop.filled { border-style: solid; border-color: color-mix(in srgb, var(--good) 50%, transparent); background: color-mix(in srgb, var(--good-soft) 40%, var(--surface)); }
 .drop-icon {
@@ -579,6 +599,11 @@ input:disabled, select:disabled {
 .collect-card p { margin: 0 0 12px; font-size: 13px; color: var(--ink-2); }
 .collect-fb-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .collect-progress { margin-top: 16px; display: flex; flex-direction: column; gap: 16px; }
+.progress-unit {
+  opacity: 0; transform: translateY(-10px);
+  transition: opacity 260ms var(--ease-out), transform 260ms var(--ease-out);
+}
+.progress-unit.in { opacity: 1; transform: none; }
 .progress-head {
   display: flex; justify-content: space-between; align-items: center;
   gap: 12px; margin-bottom: 8px; font-size: 13px;
@@ -589,11 +614,12 @@ input:disabled, select:disabled {
 .progress-fill {
   height: 100%; width: 0%;
   background: linear-gradient(90deg, var(--accent), var(--aqua));
-  border-radius: 999px; transition: width .4s ease;
+  border-radius: 999px; transition: width 400ms linear;
 }
 .progress-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 13px; color: var(--ink-2); gap: 12px; }
 .progress-right { display: inline-flex; align-items: center; gap: 12px; }
-.stop-btn { padding: 4px 12px; font-size: 12.5px; border-color: color-mix(in srgb, var(--critical) 45%, transparent); color: var(--critical); }
+.stop-btn { padding: 4px 12px; font-size: 12.5px; border-color: color-mix(in srgb, var(--critical) 45%, transparent); color: var(--critical); opacity: 0; }
+.stop-btn.in { opacity: 1; }
 .stop-btn:not([disabled]):hover { border-color: var(--critical); background: var(--critical-soft); }
 dialog .iconlink { margin-top: 2px; }
 .progress-log {
@@ -634,7 +660,7 @@ th {
 }
 .th-no { width: 40px; }
 td { padding: 11px 14px; border-bottom: 1px solid var(--grid); font-size: 13.5px; vertical-align: middle; }
-tbody tr { transition: background .12s; }
+tbody tr { transition: background 120ms ease; }
 tbody tr:hover { background: var(--surface-2); }
 tr:last-child td { border-bottom: none; }
 .cap-col { min-width: 270px; }
@@ -646,8 +672,8 @@ td.caption .cap-text {
 td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cellv { display: flex; align-items: center; gap: 7px; }
 .cellv .val { font-weight: 600; }
-.cellv .val.freshly { animation: pop .5s ease; color: var(--aqua); }
-@keyframes pop { 0% { transform: scale(1.25); } 100% { transform: scale(1); } }
+.cellv .val.freshly { animation: pop 140ms var(--ease-out); color: var(--aqua); }
+@keyframes pop { 0% { transform: scale(1.12); } 100% { transform: scale(1); } }
 button.cell-edit {
   padding: 2px 8px; font-size: 12px; border: 1px solid transparent;
   background: transparent; color: var(--muted); border-radius: 7px;
@@ -676,7 +702,7 @@ button.cell-edit:hover { border-color: var(--accent); color: var(--accent); back
 .hbar-row { display: grid; grid-template-columns: 118px 1fr; gap: 12px; align-items: center; }
 .hbar-label { font-size: 12.5px; color: var(--ink-2); text-align: right; font-weight: 600; }
 .hbar-track { position: relative; height: 24px; }
-.hbar-fill { position: absolute; inset: 0 auto 0 0; background: var(--fb); border-radius: 0 5px 5px 0; min-width: 2px; transition: background .15s; }
+.hbar-fill { position: absolute; inset: 0 auto 0 0; background: var(--fb); border-radius: 0 5px 5px 0; min-width: 2px; transition: background 150ms ease; }
 .hbar-fill:hover { background: color-mix(in srgb, var(--fb) 70%, #fff); }
 .hbar-val {
   position: absolute; top: 50%; transform: translateY(-50%);
@@ -687,6 +713,11 @@ button.cell-edit:hover { border-color: var(--accent); color: var(--accent); back
 .hbar-baseline { border-left: 1px solid var(--baseline); position: absolute; inset: -4px auto -4px 0; }
 .gen-row { display: flex; gap: 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: 16px 0; }
 .gen-actions { display: flex; gap: 12px; align-items: center; }
+.reveal-slide {
+  opacity: 0; transform: scale(0.96) translateX(-8px);
+  transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out);
+}
+.reveal-slide.in { opacity: 1; transform: none; }
 .toggle { display: flex; gap: 10px; align-items: center; font-size: 13.5px; font-weight: 500; }
 .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
 .chart-card { margin-bottom: 0; }
@@ -730,10 +761,17 @@ button:focus-visible, a:focus-visible, .nav-item:focus-visible, [tabindex]:focus
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
+  /* reduced motion means gentler, not none: colour and opacity feedback stays,
+     everything that moves is dropped */
   *, *::before, *::after {
-    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    animation-duration: 120ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 120ms !important;
+    transition-property: opacity, color, background-color, border-color,
+                         box-shadow, fill, stroke !important;
   }
+  /* keyframes ignore transition-property, so neutralize the one that moves */
+  .cellv .val.freshly { animation: none; color: var(--aqua); }
   html { scroll-behavior: auto; }
 }
 
@@ -741,8 +779,19 @@ button:focus-visible, a:focus-visible, .nav-item:focus-visible, [tabindex]:focus
 dialog {
   border: 1px solid var(--grid); border-radius: 16px; background: var(--surface); color: var(--ink);
   padding: 22px 24px; width: min(440px, 92vw); box-shadow: var(--shadow-lift);
+  opacity: 1; transform: scale(1);
+  transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out);
 }
-dialog::backdrop { background: rgba(12,14,22,.45); backdrop-filter: blur(2px); }
+@starting-style {
+  dialog[open] { opacity: 0; transform: scale(0.97); }
+}
+dialog::backdrop {
+  background: rgba(12,14,22,.45); backdrop-filter: blur(2px);
+  opacity: 1; transition: opacity 150ms var(--ease-out);
+}
+@starting-style {
+  dialog[open]::backdrop { opacity: 0; }
+}
 dialog h3 { margin: 0 0 4px; font-size: 17px; }
 dialog label { margin: 12px 0; }
 dialog input[type="range"] { min-width: 0; accent-color: var(--accent); }
@@ -756,6 +805,12 @@ dialog .tabs { margin: 12px 0 4px; }
 }
 .tooltip .tt-row { display: flex; gap: 8px; align-items: center; }
 .tooltip .sw { display: inline-block; width: 10px; height: 3px; border-radius: 2px; }
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-out);
+}
 
 @media (max-width: 1000px) {
   .review-split { grid-template-columns: 1fr; }

@@ -242,11 +242,31 @@ $("#runBtn").addEventListener("click", async () => {
 $("#newRunBtn").addEventListener("click", () => showView("inputs"));
 $("#exportBtn").addEventListener("click", () => showView("report"));
 
+/* [hidden] removes the element from layout, so a transition has nothing to run
+   from: un-hide first, force a style flush so that state is the transition's
+   start, then add the visible class; on the way out drop the class and re-hide
+   once the transition has had time to finish. */
+const CONCEAL_MS = 320;
+function reveal(el) {
+  clearTimeout(el._concealTimer);
+  el.hidden = false;
+  void el.offsetHeight;  // flush the un-hidden state; rAF would stall in a
+                         // background tab, and scrapes run for minutes
+  el.classList.add("in");
+}
+function conceal(el) {
+  if (el.hidden) return;
+  el.classList.remove("in");
+  clearTimeout(el._concealTimer);
+  el._concealTimer = setTimeout(() => { el.hidden = true; }, CONCEAL_MS);
+}
+
 function showError(msg) {
   const el = $("#runError");
   el.textContent = msg;
-  el.hidden = false;
-  setTimeout(() => { el.hidden = true; }, 8000);
+  reveal(el);
+  clearTimeout(el._dismissTimer);
+  el._dismissTimer = setTimeout(() => conceal(el), 8000);
 }
 async function errText(res) {
   try { const j = await res.json(); return j.detail || res.statusText; }
@@ -718,6 +738,9 @@ function puEls(target) {
 
 /* merge freshly-scraped runs from a status poll into state, marking new cells */
 function applyRunUpdates(freshRuns) {
+  // each poll owns its own fresh set: a cell pops on the poll it arrives and
+  // never again, even though every poll rebuilds the table's DOM
+  state.freshCells.clear();
   const activeId = state.run.run_id;
   state.runs = state.runs.map((old) => {
     const fresh = freshRuns[old.run_id];
@@ -756,21 +779,21 @@ async function startCollect(target) {
   }
   if (!res.ok) {
     errEl.textContent = await errText(res);
-    errEl.hidden = false;
+    reveal(errEl);
     return;
   }
-  errEl.hidden = true;
+  conceal(errEl);
   state.collecting[target] = true;
   $(COLLECT_BTN[target]).disabled = true;
   $("#autopilotBtn").disabled = true;
   $("#collectProgress").hidden = false;
   const el = puEls(target);
-  el.u.hidden = false;
+  reveal(el.u);
   el.fill.style.width = "0%";
   el.text.textContent = COLLECT_LABEL[target];
   el.count.textContent = "";
   el.log.innerHTML = "";
-  el.stop.hidden = false;
+  reveal(el.stop);
   el.stop.disabled = false;
   pollCollect(target);
 }
@@ -801,7 +824,7 @@ async function pollCollect(target) {
     if (s.state === "error") {
       const errEl = $("#collectError");
       errEl.textContent = s.message;
-      errEl.hidden = false;
+      reveal(errEl);
     }
   }
 }
@@ -811,7 +834,7 @@ function finishCollect(target, message) {
   $(COLLECT_BTN[target]).disabled = false;
   if (!anyCollecting() && !state.autopilot) $("#autopilotBtn").disabled = false;
   const el = puEls(target);
-  el.stop.hidden = true;
+  conceal(el.stop);
   el.text.textContent = message;
   setTimeout(() => state.freshCells.clear(), 4000);
 }
@@ -828,15 +851,15 @@ $$(".pu-stop").forEach((b) => b.addEventListener("click", async () => {
 async function metaSignInThenCollect(target = "fb") {
   const res = await fetch("/api/login/meta", { method: "POST" });
   const errEl = $("#collectError");
-  if (!res.ok) { errEl.textContent = await errText(res); errEl.hidden = false; return; }
-  errEl.hidden = true;
+  if (!res.ok) { errEl.textContent = await errText(res); reveal(errEl); return; }
+  conceal(errEl);
   $("#collectProgress").hidden = false;
   const el = puEls(target);
-  el.u.hidden = false;
+  reveal(el.u);
   el.fill.style.width = "0%";
   el.count.textContent = "";
   el.log.innerHTML = "";
-  el.stop.hidden = true;
+  conceal(el.stop);
   el.text.textContent =
     "A browser window opened on this machine — sign in to Facebook / Meta Business Suite " +
     (target === "ig" ? "and instagram.com " : "") +
@@ -849,7 +872,7 @@ async function metaSignInThenCollect(target = "fb") {
       $(COLLECT_BTN[target]).disabled = false;
       el.text.textContent = "Sign-in did not complete.";
       errEl.textContent = s.error;
-      errEl.hidden = false;
+      reveal(errEl);
       return;
     }
     if (s.ready) {
@@ -876,7 +899,7 @@ $("#apStop").addEventListener("click", async () => {
 
 function resetApUnit() {
   const el = puEls("ap");
-  el.u.hidden = false;
+  reveal(el.u);
   el.fill.style.width = "0%";
   el.count.textContent = "";
   el.log.innerHTML = "";
@@ -899,16 +922,16 @@ async function startAutopilot() {
   }
   if (!res.ok) {
     errEl.textContent = await errText(res);
-    errEl.hidden = false;
+    reveal(errEl);
     return;
   }
-  errEl.hidden = true;
+  conceal(errEl);
   state.autopilot = true;
   $("#autopilotBtn").disabled = true;
   Object.values(COLLECT_BTN).forEach((sel) => { $(sel).disabled = true; });
   const el = resetApUnit();
   el.text.textContent = "Autopilot started…";
-  $("#apStop").hidden = false;
+  reveal($("#apStop"));
   $("#apStop").disabled = false;
   pollAutopilot();
 }
@@ -950,7 +973,7 @@ async function pollAutopilot() {
     if (s.state === "error") {
       const errEl = $("#collectError");
       errEl.textContent = s.message;
-      errEl.hidden = false;
+      reveal(errEl);
     }
   }
 }
@@ -960,7 +983,7 @@ function finishAutopilot(message) {
   $("#autopilotBtn").disabled = false;
   Object.values(COLLECT_BTN).forEach((sel) => { $(sel).disabled = false; });
   const el = puEls("ap");
-  $("#apStop").hidden = true;
+  conceal($("#apStop"));
   el.text.textContent = message;
   setTimeout(() => state.freshCells.clear(), 4000);
 }
@@ -969,10 +992,10 @@ function finishAutopilot(message) {
 async function metaSignInThenAutopilot() {
   const res = await fetch("/api/login/meta", { method: "POST" });
   const errEl = $("#collectError");
-  if (!res.ok) { errEl.textContent = await errText(res); errEl.hidden = false; return; }
-  errEl.hidden = true;
+  if (!res.ok) { errEl.textContent = await errText(res); reveal(errEl); return; }
+  conceal(errEl);
   const el = resetApUnit();
-  $("#apStop").hidden = true;
+  conceal($("#apStop"));
   el.text.textContent =
     "Autopilot needs the Meta session first. A browser window opened on this machine — " +
     "sign in to Facebook / Meta Business Suite and instagram.com (2FA is fine), " +
@@ -985,7 +1008,7 @@ async function metaSignInThenAutopilot() {
       $("#autopilotBtn").disabled = false;
       el.text.textContent = "Sign-in did not complete.";
       errEl.textContent = s.error;
-      errEl.hidden = false;
+      reveal(errEl);
       return;
     }
     if (s.ready) {
@@ -1046,7 +1069,7 @@ $("#genBtn").addEventListener("click", async () => {
   if (!res.ok) { showError(await errText(res)); return; }
   const data = await res.json();
   const dl = $("#dlBtn");
-  dl.hidden = false;
+  reveal(dl);
   dl.href = `/api/report/${state.run.run_id}/download`;
   $("#dlText").textContent = `Download ${data.name}`;
 });
@@ -1060,7 +1083,7 @@ $("#genAllBtn").addEventListener("click", async () => {
   if (!res.ok) { showError(await errText(res)); return; }
   const data = await res.json();
   const dl = $("#dlAllBtn");
-  dl.hidden = false;
+  reveal(dl);
   dl.href = `/api/report/batch/download/${encodeURIComponent(data.name)}`;
   $("#dlAllText").textContent = `Download ${data.name}`;
 });
@@ -1299,5 +1322,14 @@ function applyTheme(t) {
   $("use", $("#themeBtn")).setAttribute("href", t === "dark" ? "#i-sun" : "#i-moon");
 }
 applyTheme(document.documentElement.dataset.theme || "light");
-$("#themeBtn").addEventListener("click", () =>
-  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
+/* a full-page colour inversion is jarring with no bridge; the View Transitions
+   API cross-fades it without transitioning colours on every element */
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.startViewTransition(() => applyTheme(next));
+  } else {
+    applyTheme(next);
+  }
+}
+$("#themeBtn").addEventListener("click", toggleTheme);
