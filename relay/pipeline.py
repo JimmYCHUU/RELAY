@@ -14,6 +14,7 @@ from typing import Optional
 from .ingest.campaign import parse_campaign
 from .ingest.insights import build_index
 from .models import RowIssue, RunResult
+from .report.palette import accent_from_campaign
 from .resolve.insights_fill import (fill_from_insights,
                                     fill_instagram_from_insights,
                                     note_unaccounted, uncovered_pages)
@@ -29,7 +30,8 @@ def run_pipeline(
 ) -> RunResult:
     campaign, issues = parse_campaign(campaign_path, sheet)
     rows = [build_row(crow) for crow in campaign]
-    result = RunResult(brand=brand, month=sheet, rows=rows, issues=issues)
+    result = RunResult(brand=brand, month=sheet, rows=rows, issues=issues,
+                       accent=accent_from_campaign(campaign_path, sheet))
 
     # One index over both exports: they are the same shape with different words
     # for the same columns (see config.INSIGHTS_HEADERS), and each fill step keys

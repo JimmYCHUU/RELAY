@@ -97,6 +97,11 @@ class RunResult:
     month: str
     rows: list[ReportRow]
     issues: list[RowIssue] = field(default_factory=list)
+    # The brand's colour, read off the campaign sheet's brand-name and header
+    # rows (report.palette). None when that sheet was never branded, which
+    # leaves the report on its default teal. Carried per run so each brand in a
+    # multi-brand cycle keeps its own.
+    accent: str | None = None
     # ingest.insights.InsightsIndex, attached by run_pipeline. Left untyped to
     # keep models.py free of an import cycle (insights.py imports InsightsRow
     # from here). Collectors reuse it to look up shares once resolved.

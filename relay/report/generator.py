@@ -3,10 +3,18 @@
 Layout (columns, footer formulas, merges) still mirrors the hand-made
 the client's own hand-made report as ground truth; the visual layer is the
 modern style the analyst approved from `style-samples/style-3-modern-theme.xlsx`.
-The palette is fixed. It was derived from the campaign sheet's own fills for a
-while, but a campaign sheet's strongest colour is whatever someone highlighted a
-cell with — on the June sheets that read as plain yellow (FFFF00) and produced an
-olive masthead. The sample's teal is the approved look, so it is simply the look.
+
+The report's chrome wears the sponsor's own colour, read off the campaign
+sheet's brand-name and header rows (see `palette.py`): the banner, the header
+row, the rule beneath it, and the Sum / Total / Average rows. The data rows
+stay neutral — the zebra stripe, captions and links are what a reader is
+actually reading, and tinting those buys nothing.
+
+Only those two header rows are consulted. An earlier attempt took the sheet's
+strongest colour from anywhere in the tab, which on the June sheets picked up a
+highlighted cell's yellow (FFFF00) and produced an olive masthead. A sheet with
+no brand colour at all — SMC Plus's June tracker fills those rows plain grey —
+falls back to the approved teal, unchanged.
 
 Nothing in the delivered file explains how RELAY works: no cell comments, no
 provenance, no notes. The dashboard is where a figure is audited; this workbook
@@ -21,10 +29,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from ..models import RunResult
+from .palette import DEFAULT, derive
 
-# style-3's exact palette. The tint and band are the sample's own hand-picked
-# values, not a formula's output — mixing the accent toward white lands a few
-# points off on both.
+# style-3's exact palette, still the fallback for an unbranded sheet. The tint
+# and band are the sample's own hand-picked values, not a formula's output —
+# mixing the accent toward white lands a few points off on both.
 ACCENT = "0C8F7C"
 TINT = "E7F5F2"
 BAND = "F5F8F7"
@@ -68,21 +77,26 @@ def build_report(
     out_path: str | Path,
     sheet_name: str | None = None,
 ) -> Path:
-    fill_acc = PatternFill("solid", fgColor="FF" + ACCENT)
-    fill_tint = PatternFill("solid", fgColor="FF" + TINT)
-    fill_band = PatternFill("solid", fgColor="FF" + BAND)
+    # The sponsor's colour dresses the chrome; the data rows below stay neutral.
+    pal = derive(result.accent) if result.accent else DEFAULT
+
+    fill_acc = PatternFill("solid", fgColor="FF" + pal.accent)
+    fill_tint = PatternFill("solid", fgColor="FF" + pal.tint)
+    fill_band = PatternFill("solid", fgColor="FF" + BAND)   # data zebra: neutral
     lgray = Side(style="thin", color="FFD5DDDA")
     border = Border(left=lgray, right=lgray, top=lgray, bottom=lgray)
     header_border = Border(left=lgray, right=lgray, top=lgray,
-                           bottom=Side(style="medium", color="FF" + ACCENT))
+                           bottom=Side(style="medium", color="FF" + pal.rule))
     no_border = Border()
-    f_banner = Font(name="Arial", size=38, bold=True, color="FFFFFFFF")
+    # Banner and footer ink flip to dark on a light brand colour — white 38pt on
+    # TK Super Board's gold or SMC Plus's green is unreadable.
+    f_banner = Font(name="Arial", size=38, bold=True, color="FF" + pal.on_accent)
     f_header = Font(name="Arial", size=12, bold=True, color=INK)
     f_data = Font(name="Arial", size=12, bold=True, color="FF111111")
     f_caption = Font(name="Arial", size=11, color=INK)
     f_link = Font(name="Arial", size=9, color=LINK_BLUE, underline="single")
-    f_sum = Font(name="Arial", size=12, bold=True, color="FF" + ACCENT)
-    f_foot = Font(name="Arial", size=16, bold=True, color="FFFFFFFF")
+    f_sum = Font(name="Arial", size=12, bold=True, color="FF" + pal.accent_text)
+    f_foot = Font(name="Arial", size=16, bold=True, color="FF" + pal.on_accent)
     left = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
     wb = openpyxl.Workbook()
