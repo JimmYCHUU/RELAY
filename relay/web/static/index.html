@@ -206,13 +206,19 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       <input id="brand" type="text" placeholder="e.g. Acme Foods" list="brandHints">
       <datalist id="brandHints"></datalist>
     </label>
-    <label>Month tab
-      <select id="sheet" disabled><option>Upload campaign first</option></select>
+    <label>Campaign tabs
+      <div id="sheetList" class="sheet-list" data-empty="Upload a campaign sheet first"></div>
     </label>
     <button id="addBrandBtn" class="ghost lg" disabled title="Stage this brand, then upload the next campaign sheet">
       <svg class="ic-svg"><use href="#i-plus"/></svg> Add brand</button>
     <button id="runBtn" class="primary lg" disabled>Run matching →</button>
   </div>
+  <label class="toggle sheet-merge" id="mergeRow" hidden>
+    <input type="checkbox" id="mergeToggle" checked>
+    <span>Deliver these tabs as one workbook
+      <span class="sub">(one continuous table, with a column naming each row's tab —
+      untick for a separate file per tab)</span></span>
+  </label>
   <div id="cycleList" class="cycle-list" hidden></div>
   <p id="runError" class="error" hidden></p>
 </section>
@@ -392,8 +398,9 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       <input type="checkbox" id="commentsToggle" checked>
       <span>Mark estimated cells with comments <span class="sub">(untick for the sponsor-facing copy)</span></span>
     </label>
+    <p id="genHint" class="sub gen-hint" hidden></p>
     <div class="gen-actions">
-      <button id="genAllBtn" class="ghost lg" hidden>Generate all brands (.zip)</button>
+      <button id="genAllBtn" class="ghost lg" hidden>Generate every workbook (.zip)</button>
       <a id="dlAllBtn" class="ghost lg reveal-slide" hidden download><svg class="ic-svg"><use href="#i-download"/></svg> <span id="dlAllText">Download zip</span></a>
       <button id="genBtn" class="primary lg">Generate .xlsx</button>
       <a id="dlBtn" class="ghost lg reveal-slide" hidden download><svg class="ic-svg"><use href="#i-download"/></svg> <span id="dlText">Download</span></a>

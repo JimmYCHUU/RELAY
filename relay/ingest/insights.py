@@ -217,6 +217,17 @@ def _build_row(values: list[object], cols: dict[str, int], fname: str,
     permalink = str(cell("permalink") or "").strip()
     if not permalink:
         return None
+    reactions = _to_int(cell("reactions"))
+    comments = _to_int(cell("comments"))
+    shares = _to_int(cell("shares"))
+    engagement = _to_int(cell("engagement"))
+    if engagement is None:
+        # Meta's own combined column is the figure of record; this only stands in
+        # for an export that lacks it. Requires all three parts — a partial sum
+        # would be a smaller number wearing the same label.
+        parts = (reactions, comments, shares)
+        if all(p is not None for p in parts):
+            engagement = sum(parts)
     return InsightsRow(
         post_id=str(cell("post_id") or "").strip(),
         permalink=permalink,
@@ -226,7 +237,10 @@ def _build_row(values: list[object], cols: dict[str, int], fname: str,
         published=_to_dt(cell("published")),
         views=_to_int(cell("views")),
         reach=_to_int(cell("reach")),
-        reactions=_to_int(cell("reactions")),
+        reactions=reactions,
+        engagement=engagement,
+        comments=comments,
+        shares=shares,
         post_type=str(cell("post_type") or "").strip(),
         is_share=str(cell("is_share") or "").strip().lower() in _TRUTHY,
         source_file=fname,

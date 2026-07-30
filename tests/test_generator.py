@@ -15,34 +15,53 @@ def generated(april_result, tmp_path):
 
 def test_banner_and_header(generated):
     ws = generated
-    assert "A1:M1" in {str(r) for r in ws.merged_cells.ranges}
+    assert "A1:S1" in {str(r) for r in ws.merged_cells.ranges}
     assert ws["A1"].value.startswith("BRAND A")
     assert ws["A1"].font.size == 38 and ws["A1"].font.bold
     # no campaign sheet given -> the theme's fallback accent
     assert ws["A1"].fill.fgColor.rgb.endswith(ACCENT)
     assert ws["A2"].value == "No" and ws["E2"].value == "Views"
     assert ws["A2"].font.size == 12 and ws["A2"].font.bold
+    # each Facebook link carries Views / Reach / Engagement; X and Instagram,
+    # which no export reports reach or engagement for, keep a single column
+    assert [ws.cell(row=2, column=c).value for c in range(4, 8)] == \
+        ["Content's Link 1", "Views", "Reach", "Engagement"]
+    assert [ws.cell(row=2, column=c).value for c in (16, 17, 18, 19)] == \
+        ["X, Link 4", "Impressions", "Instagram", "Views"]
+    # a single-tab report says nothing about source tabs
+    assert ws.cell(row=2, column=20).value is None
 
 
 def test_footer_formulas(generated):
     ws = generated
     n = 25
-    sum_row, total_row, avg_row = n + 3, n + 4, n + 5
+    sum_row = n + 3
+    total_row, reach_row, eng_row, avg_row = (sum_row + i for i in (1, 2, 3, 4))
     assert ws.cell(row=sum_row, column=1).value == "Sum"
     assert ws.cell(row=sum_row, column=5).value == f"=SUM(E3:E{n + 2})"
-    assert ws.cell(row=sum_row, column=13).value == f"=SUM(M3:M{n + 2})"
-    assert ws.cell(row=total_row, column=5).value == f"=SUM(E{sum_row}:M{sum_row})"
-    assert ws.cell(row=avg_row, column=5).value == f"=E{total_row}/{n}"
-    assert ws.cell(row=avg_row, column=5).number_format == "0"
+    assert ws.cell(row=sum_row, column=19).value == f"=SUM(S3:S{n + 2})"
+    # link columns carry no total
+    assert ws.cell(row=sum_row, column=4).value is None
+    # the three metrics interleave, so each total adds its own columns
+    assert ws.cell(row=total_row, column=4).value == \
+        f"=E{sum_row}+I{sum_row}+M{sum_row}+Q{sum_row}+S{sum_row}"
+    assert ws.cell(row=reach_row, column=1).value == "Total reach (Facebook)"
+    assert ws.cell(row=reach_row, column=4).value == \
+        f"=F{sum_row}+J{sum_row}+N{sum_row}"
+    assert ws.cell(row=eng_row, column=1).value == "Total engagement (Facebook)"
+    assert ws.cell(row=eng_row, column=4).value == \
+        f"=G{sum_row}+K{sum_row}+O{sum_row}"
+    assert ws.cell(row=avg_row, column=4).value == f"=D{total_row}/{n}"
+    assert ws.cell(row=avg_row, column=4).number_format == "0"
 
 
 def test_footer_merges(generated):
     ws = generated
     merges = {str(r) for r in ws.merged_cells.ranges}
-    n = 25
-    assert f"A{n + 3}:D{n + 3}" in merges
-    assert f"A{n + 4}:D{n + 4}" in merges and f"E{n + 4}:M{n + 4}" in merges
-    assert f"A{n + 5}:D{n + 5}" in merges and f"E{n + 5}:M{n + 5}" in merges
+    sum_row = 25 + 3
+    assert f"A{sum_row}:C{sum_row}" in merges
+    for rr in range(sum_row + 1, sum_row + 5):
+        assert f"A{rr}:C{rr}" in merges and f"D{rr}:S{rr}" in merges
 
 
 def test_data_row_styles(generated):
@@ -63,17 +82,19 @@ def test_modern_theme_polish(generated):
     # alternating banding: row 4 is banded, row 3 is not
     assert ws["A4"].fill.fill_type == "solid"
     assert ws["A3"].fill.fill_type != "solid"
-    # nothing beyond column M reaches the sponsor
-    assert ws.max_column <= 13
+    # nothing beyond column S reaches the sponsor on a single-tab report
+    assert ws.max_column <= 19
     # rows are tall enough for wrapped captions
     assert ws.row_dimensions[3].height >= 70
 
 
 def test_column_widths(generated):
     ws = generated
-    expected = {"A": 16.7, "C": 31.3, "M": 19.6}
+    expected = {"A": 16.7, "C": 31.3, "S": 19.6}
     for col, w in expected.items():
         assert abs(ws.column_dimensions[col].width - w) < 0.1
+    # the unused Source tab column is never sized on a single-tab report
+    assert "T" not in ws.column_dimensions
 
 
 def _colored_campaign(path, fill_hex):

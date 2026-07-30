@@ -660,3 +660,61 @@ def test_a_page_no_export_covers_is_named_outright(tmp_path):
     assert "identify it by its post id" in run.rows[0].cells["fb1"].note
     # …the uncovered one is told the truth: nothing will ever fill it
     assert "none of the supplied exports cover somoytechnews" in run.rows[0].cells["fb2"].note
+
+
+# --- reach and engagement, the report's other two Facebook figures ---
+#
+# The report prints Views, Reach and Engagement per Facebook link. All three have
+# to come off the *same* export row, and Engagement has to be Meta's own combined
+# "Reactions, comments and shares" rather than a number RELAY adds up — a sponsor
+# checks it against Business Suite, where that column is what they see.
+
+def test_engagement_reads_metas_combined_column_not_the_parts(tmp_path):
+    """ROWS' first post has RCS 7 beside Reactions 5 and Comments 2. The
+    combined column is the figure of record; 5 + 2 only happens to agree here,
+    and would not once Shares is non-zero."""
+    index = build_index([_csv(tmp_path, ROWS)])
+    row = index.lookup(f"{PAGE}pfbid0AAA")
+    assert (row.views, row.reach) == (564, 393)
+    assert row.engagement == 7
+    assert (row.reactions, row.comments) == (5, 2)
+
+
+def test_engagement_is_reconstructed_only_when_the_column_is_absent(tmp_path):
+    header = ('"Post ID","Page ID","Page name",Title,"Publish time",Permalink,'
+              '"Is share","Post type",Views,Reach,Reactions,Comments,Shares\n')
+    rows = (f'3001,900,"p","cap","07/03/2026 10:00",{PAGE}pfbid0NOCOMBINED,'
+            '0,Photos,500,300,40,7,3\n'
+            # one part missing: a partial sum would be a smaller number wearing
+            # the same label, so no engagement is claimed at all
+            f'3002,900,"p","cap2","07/03/2026 10:00",{PAGE}pfbid0PARTIAL,'
+            '0,Photos,500,300,40,,\n')
+    index = build_index([_csv(tmp_path, rows, header=header)])
+    assert index.lookup(f"{PAGE}pfbid0NOCOMBINED").engagement == 50
+    assert index.lookup(f"{PAGE}pfbid0PARTIAL").engagement is None
+
+
+def test_a_filled_cell_carries_reach_and_engagement_from_its_own_row(tmp_path):
+    index = build_index([_csv(tmp_path, ROWS)])
+    cell = cell_from_insights(index.lookup(f"{PAGE}pfbid0BBB"), "views")
+    assert (cell.value, cell.reach, cell.engagement) == (4000, 2800, 120)
+
+
+def test_a_cell_no_export_filled_offers_no_reach_or_engagement():
+    """A collector reads a view count off the post page and a manual entry is a
+    single typed number — neither has reach or engagement, and the report must
+    leave those blank rather than print a zero the post never reported."""
+    blank = CellValue.missing("awaiting the insights export")
+    assert blank.reach is None and blank.engagement is None
+    typed = CellValue(1234, "manual", 1.0, "manual entry")
+    assert typed.reach is None and typed.engagement is None
+
+
+def test_reactions_column_is_still_not_mistaken_for_the_combined_one():
+    """The guard that made resolve_headers claim exact matches first now has a
+    third neighbour to keep apart."""
+    cols = resolve_headers(["Views", "Reach", "Reactions, comments and shares",
+                            "Reactions", "Comments", "Shares", "Permalink"])
+    assert cols["engagement"] == 2
+    assert cols["reactions"] == 3
+    assert cols["comments"] == 4 and cols["shares"] == 5

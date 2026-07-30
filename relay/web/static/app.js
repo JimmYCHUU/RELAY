@@ -6,8 +6,12 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const state = {
   files: {},          // kind -> {path, name, sheets?}
-  pending: [],        // brands staged for this cycle: {campaign, brand, sheet}
-  runs: [],           // every brand's run in the cycle
+  pending: [],        // brands staged for this cycle: {campaign, brand, sheets, merge}
+  runs: [],           // every tab's run in the cycle — matching is always per tab
+  /* One delivered workbook each: {brand, label, run_ids}. A brand whose tabs
+     were ticked together is one group of several runs; everything else is a
+     group of one. Reporting works off these, matching and review off `runs`. */
+  groups: [],
   run: null,          // the ACTIVE run — all per-brand renderers read this
   dashSel: "all",     // dashboard scope: "all" | run index
   filter: "all",
@@ -130,18 +134,31 @@ async function uploadFile(kind, file) {
   zone.classList.add("filled");
 
   if (kind === "campaign") {
-    const sel = $("#sheet");
-    sel.innerHTML = data.sheets.map((s) => `<option>${esc(s)}</option>`).join("");
-    sel.disabled = false;
+    renderSheetList(data.sheets);
     guessBrand(data.name);
   }
   if (kind === "reference") $("#ccBtn").disabled = false;
   updateRunButtons();
 }
 
+/* A sponsor's workbook is usually one campaign split across tabs, so every tab
+   starts ticked and merged; unticking is how you say otherwise. */
+function renderSheetList(sheets) {
+  const list = sheets ?? [];
+  $("#sheetList").innerHTML = list.map((s) => `
+    <label><input type="checkbox" value="${esc(s)}" checked>${esc(s)}</label>`).join("");
+  $("#mergeRow").hidden = list.length < 2;
+}
+
+function pickedSheets() {
+  return $$("#sheetList input:checked").map((i) => i.value);
+}
+$("#sheetList").addEventListener("change", updateRunButtons);
+
 function updateRunButtons() {
-  $("#addBrandBtn").disabled = !state.files.campaign;
-  $("#runBtn").disabled = !(state.files.campaign || state.pending.length);
+  const ready = !!state.files.campaign && pickedSheets().length > 0;
+  $("#addBrandBtn").disabled = !ready;
+  $("#runBtn").disabled = !(ready || state.pending.length);
 }
 
 function guessBrand(filename) {
@@ -154,30 +171,35 @@ function guessBrand(filename) {
 
 /* ═════════ cycle staging & run ═════════ */
 function stageBrand() {
-  if (!state.files.campaign) return;
+  const sheets = pickedSheets();
+  if (!state.files.campaign || !sheets.length) return;
   state.pending.push({
     campaign: state.files.campaign,
     brand: $("#brand").value.trim() || "SPONSOR",
-    sheet: $("#sheet").value,
+    sheets,
+    merge: sheets.length > 1 && $("#mergeToggle").checked,
   });
   state.files.campaign = null;
   const zone = $('.drop[data-kind="campaign"]');
   zone.classList.remove("filled");
   $(".file-name", zone).textContent = "";
-  const sel = $("#sheet");
-  sel.innerHTML = "<option>Upload campaign first</option>";
-  sel.disabled = true;
+  renderSheetList([]);
   $("#brand").value = "";
   renderCycleList();
   updateRunButtons();
 }
 $("#addBrandBtn").addEventListener("click", stageBrand);
 
+function stagedTabs(p) {
+  if (p.sheets.length === 1) return p.sheets[0];
+  return `${p.sheets.length} tabs${p.merge ? " merged" : " separate"}`;
+}
+
 function renderCycleList() {
   const el = $("#cycleList");
   el.hidden = !state.pending.length;
   el.innerHTML = state.pending.map((p, i) => `
-    <span class="cycle-chip">${esc(p.brand)}<span class="sub">· ${esc(p.sheet)}</span>
+    <span class="cycle-chip">${esc(p.brand)}<span class="sub">· ${esc(stagedTabs(p))}</span>
       <button data-i="${i}" title="Remove ${esc(p.brand)}">✕</button></span>`).join("");
 }
 $("#cycleList").addEventListener("click", (e) => {
@@ -191,9 +213,11 @@ $("#cycleList").addEventListener("click", (e) => {
 function cycleLabel() {
   if (!state.runs.length) return "No month loaded";
   const month = state.runs[0].month;
-  return state.runs.length > 1
-    ? `${state.runs.length} brands · ${month}`
-    : `${state.runs[0].brand} · ${month}`;
+  // Counted by brand, not by run: three tabs of one sponsor are one brand.
+  const brands = new Set(state.runs.map((r) => r.brand));
+  if (brands.size > 1) return `${brands.size} brands · ${month}`;
+  const tabs = state.runs.length;
+  return `${state.runs[0].brand} · ${month}` + (tabs > 1 ? ` +${tabs - 1} tabs` : "");
 }
 
 $("#runBtn").addEventListener("click", async () => {
@@ -206,18 +230,36 @@ $("#runBtn").addEventListener("click", async () => {
   const batch = state.pending;
   $("#runBtn").disabled = true;
   try {
+    // Matching is always per tab — each has its own header row, its own blank-
+    // date repair and its own brand colour. Merging happens at report time.
     const runs = [];
-    for (const [i, p] of batch.entries()) {
-      $("#runBtn").textContent = batch.length > 1
-        ? `Matching ${p.brand} (${i + 1}/${batch.length})…` : "Matching…";
-      const res = await fetch("/api/run", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaign: p.campaign.path, sheet: p.sheet, brand: p.brand, ...shared }),
-      });
-      if (!res.ok) throw new Error(`${p.brand}: ${await errText(res)}`);
-      runs.push(await res.json());
+    const groups = [];
+    const total = batch.reduce((a, p) => a + p.sheets.length, 0);
+    let done = 0;
+    for (const p of batch) {
+      const ids = [];
+      for (const sheet of p.sheets) {
+        done += 1;
+        $("#runBtn").textContent = total > 1
+          ? `Matching ${p.brand} · ${sheet} (${done}/${total})…` : "Matching…";
+        const res = await fetch("/api/run", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ campaign: p.campaign.path, sheet, brand: p.brand, ...shared }),
+        });
+        if (!res.ok) throw new Error(`${p.brand} · ${sheet}: ${await errText(res)}`);
+        const run = await res.json();
+        runs.push(run);
+        ids.push(run.run_id);
+      }
+      if (p.merge && ids.length > 1) {
+        groups.push({ brand: p.brand, label: p.sheets[0], run_ids: ids });
+      } else {
+        ids.forEach((id, k) => groups.push(
+          { brand: p.brand, label: p.sheets[k], run_ids: [id] }));
+      }
     }
     state.runs = runs;
+    state.groups = groups;
     state.run = runs[0];
     state.pending = [];
     state.selectedRow = null;
@@ -312,7 +354,8 @@ function renderDashSeg() {
   const el = $("#dashBrandSeg");
   el.hidden = state.runs.length < 2;
   if (el.hidden) return;
-  const opts = [["all", "All brands"], ...state.runs.map((r, i) => [String(i), r.brand])];
+  const opts = [["all", "All brands"],
+                ...state.runs.map((r, i) => [String(i), runTabLabel(r)])];
   el.innerHTML = opts.map(([v, label]) =>
     `<button class="tab${String(state.dashSel) === v ? " active" : ""}" data-sel="${v}">${esc(label)}</button>`).join("");
 }
@@ -568,12 +611,19 @@ function needsAttention(row) {
 }
 
 /* one tab per brand — the workspace switcher (Phase 8); count = needs attention */
+/* One brand across several tabs would otherwise render as identical tabs, so
+   the tab name is shown whenever a brand appears more than once. */
+function runTabLabel(run) {
+  const repeated = state.runs.filter((r) => r.brand === run.brand).length > 1;
+  return repeated ? `${run.brand} · ${run.month}` : run.brand;
+}
+
 function renderBrandTabs(sel, onSwitch) {
   const el = $(sel);
   el.innerHTML = state.runs.map((r, i) => `
     <button class="ctab${r === state.run ? " active" : ""}" role="tab"
       aria-selected="${r === state.run}" data-run="${i}">
-      ${esc(r.brand)} <span class="count">${r.rows.filter(needsAttention).length || ""}</span>
+      ${esc(runTabLabel(r))} <span class="count">${r.rows.filter(needsAttention).length || ""}</span>
     </button>`).join("");
   el.onclick = (e) => {
     const b = e.target.closest(".ctab");
@@ -1025,11 +1075,33 @@ async function metaSignInThenAutopilot() {
 /* ═════════ report ═════════ */
 $("#toReport").addEventListener("click", () => showView("report"));
 
+/* The group whose workbook the active run will land in. */
+function activeGroup() {
+  const id = state.run?.run_id;
+  return state.groups.find((g) => g.run_ids.includes(id))
+    ?? { brand: state.run?.brand, label: state.run?.month, run_ids: [id] };
+}
+
+function renderGenHint() {
+  const g = activeGroup();
+  const el = $("#genHint");
+  el.hidden = g.run_ids.length < 2;
+  if (el.hidden) return;
+  const tabs = g.run_ids
+    .map((id) => state.runs.find((r) => r.run_id === id)?.month)
+    .filter(Boolean);
+  const rows = g.run_ids.reduce((a, id) =>
+    a + (state.runs.find((r) => r.run_id === id)?.rows.length ?? 0), 0);
+  el.textContent = `One workbook for ${g.brand}: ${tabs.join(" + ")} — `
+    + `${rows} rows in one table, each tagged with the tab it came from.`;
+}
+
 function renderReport() {
   if (!state.run) return;
   renderBrandTabs("#brandTabsReport", renderReport);
-  $("#genAllBtn").hidden = state.runs.length < 2;
-  if (state.runs.length < 2) $("#dlAllBtn").hidden = true;
+  renderGenHint();
+  $("#genAllBtn").hidden = state.groups.length < 2;
+  if (state.groups.length < 2) $("#dlAllBtn").hidden = true;
   const r = state.run;
   const sums = slotSums();
   const fbTotal = sums.fb1 + sums.fb2 + sums.fb3;
@@ -1065,20 +1137,27 @@ function renderReport() {
 }
 
 $("#genBtn").addEventListener("click", async () => {
-  const res = await fetch(`/api/report/${state.run.run_id}?comments=${$("#commentsToggle").checked}`, { method: "POST" });
+  const g = activeGroup();
+  const res = await fetch("/api/report/group", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_ids: g.run_ids, label: g.label }),
+  });
   if (!res.ok) { showError(await errText(res)); return; }
   const data = await res.json();
   const dl = $("#dlBtn");
   reveal(dl);
-  dl.href = `/api/report/${state.run.run_id}/download`;
+  // By name, not by run id: a merged workbook belongs to several runs at once.
+  dl.href = `/api/report/download/${encodeURIComponent(data.name)}`;
   $("#dlText").textContent = `Download ${data.name}`;
 });
 
 $("#genAllBtn").addEventListener("click", async () => {
   const res = await fetch("/api/report/batch", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ run_ids: state.runs.map((r) => r.run_id),
-                           comments: $("#commentsToggle").checked }),
+    body: JSON.stringify({
+      groups: state.groups.map((g) => ({ run_ids: g.run_ids, label: g.label })),
+      comments: $("#commentsToggle").checked,
+    }),
   });
   if (!res.ok) { showError(await errText(res)); return; }
   const data = await res.json();

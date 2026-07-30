@@ -13,21 +13,53 @@ views, Average rows, styling and all.
 
 ## Install & run
 
-There are two ways to run RELAY. **Docker** is the least work and keeps your
-machine clean; **native Python** is better if you want to edit the code, and it
-is the only way to do the one-time Meta sign-in (a container has no screen to
+**On Windows, just double-click `Start RELAY.bat`** — see
+[Route 0](#route-0--windows-double-click-no-docker-no-terminal) below. It does
+everything itself and needs no Docker and no terminal.
+
+Otherwise there are two ways to run RELAY. **Docker** is the least work and keeps
+your machine clean; **native Python** is better if you want to edit the code, and
+it is the only way to do the one-time Meta sign-in (a container has no screen to
 open a browser window on). Many people use both: Docker for the dashboard,
 native Python once for the login.
 
+---
+
+### Route 0 — Windows double-click (no Docker, no terminal)
+
+Copy the RELAY folder anywhere on the PC and **double-click `Start RELAY.bat`**.
+
+The first run sets everything up — it finds Python (offering to install it if the
+PC has none), builds a private environment in `.venv-win\`, installs the
+dependencies and downloads the browser the collectors drive. That takes a few
+minutes and about 150 MB. **Every run after that just starts RELAY**, which takes
+a second or two; the setup is repeated only if `requirements.txt` changes.
+
+The dashboard opens in the default browser by itself. Leave the black window
+open while working — closing it stops RELAY.
+
+A few things worth knowing:
+
+- It binds to `127.0.0.1` only, so **Windows never asks about the firewall** and
+  nothing on the network can reach it.
+- If port 8501 is busy (usually another RELAY still open), it quietly takes the
+  next free one and opens that.
+- Reports and run history land in `data\` **beside the .bat**, wherever you put
+  the folder.
+- To undo the install completely, delete the `.venv-win` folder.
+- The one-time Meta sign-in still applies if you want the collectors — see
+  [One-time setup](#one-time-setup-the-meta-sign-in). Matching, the dashboard and
+  report generation need no sign-in at all.
+
 ### What you need first
 
-| | Docker route | Native route |
-|---|---|---|
-| Docker Desktop / Engine | **required** | — |
-| Python | — | **3.12 or newer** |
-| Git | to clone the repo | to clone the repo |
-| Free disk | ~1.5 GB (image incl. Chromium) | ~700 MB (with Chromium) |
-| A desktop session | only for the Meta login | only for the Meta login |
+| | Windows double-click | Docker route | Native route |
+|---|---|---|---|
+| Docker Desktop / Engine | — | **required** | — |
+| Python | installed for you if missing | — | **3.12 or newer** |
+| Git | — (copy the folder) | to clone the repo | to clone the repo |
+| Free disk | ~700 MB (with Chromium) | ~1.5 GB (image incl. Chromium) | ~700 MB (with Chromium) |
+| A desktop session | only for the Meta login | only for the Meta login | only for the Meta login |
 
 RELAY runs on **Windows, macOS and Linux**. Nothing is sent anywhere — it talks
 to Facebook/Instagram/X only when you explicitly start a collector, using a
@@ -241,13 +273,51 @@ curl http://localhost:8501/api/runs   # dashboard alive → JSON run history
    export) and drop it in too — **one file covers all your pages**, so this is a
    single download per month, not one per page. It carries Meta's **exact** Views
    per post, which is what the report's Views column has always meant.
-4. Open the dashboard → drop files → pick brand + month tab → **Run matching**.
+4. Open the dashboard → drop files → set the brand and tick the campaign tabs →
+   **Run matching**.
 5. Review: green = matched, amber = estimated, blue = manual, red outline =
    missing. Click ✎ on any cell to estimate from reactions or type an exact value.
 6. **Generate .xlsx** → download → e-mail it. Untick "mark estimated cells" for
    the sponsor-facing copy.
 7. Optionally drop last cycle's hand-made report under *Cross-check* to verify
    RELAY cell-by-cell.
+
+### One workbook per brand, however many tabs
+
+A sponsor's campaign usually lives in several tabs of one workbook — Ruchi's June
+runs as `June`, `June ratio 2` and `8 Teams Special` — and the sponsor is handed
+**one file**, not three.
+
+So the campaign-sheet panel lists every tab with a tick box. All of them start
+ticked, and **"Deliver these tabs as one workbook"** is on: matching still runs
+per tab (each has its own header row and its own brand colour), but the report
+comes out as one continuous table, renumbered 1..n, with a **Source tab** column
+saying which tab each row came from and a single set of totals at the bottom.
+
+Untick that box to get a separate file per tab instead. Untick individual tabs to
+leave them out entirely.
+
+**Different brands never merge.** Add Ruchi (3 tabs → one workbook), then add
+Cocola (2 tabs → a second workbook); *Generate every workbook (.zip)* bundles
+them without a sponsor ever seeing another sponsor's numbers.
+
+### What the report carries
+
+Per row: `No · Date · Content's name`, then each of the three Facebook links with
+its own **Views · Reach · Engagement**, then the X link with Impressions and the
+Instagram link with Views.
+
+Reach and Engagement are Meta's own columns from the Business Suite export —
+Engagement is the export's *"Reactions, comments and shares"* figure, not a number
+RELAY adds up, so it matches what you see in Business Suite. They are Facebook-only:
+neither X's public page nor the Instagram export publishes an equivalent, and a
+cell RELAY filled from a collector visit or a typed override has no reach or
+engagement to report, so those stay blank rather than showing a zero the post
+never reported.
+
+The footer carries **Sum** per column, then **Total views**, **Total reach
+(Facebook)**, **Total engagement (Facebook)** and **Average views per content** —
+all live Excel formulas.
 
 ## CLI
 
@@ -338,6 +408,16 @@ To confirm what the server is actually serving:
 ```bash
 curl -s http://localhost:8501/ | grep -c autopilotBtn    # 1 = current, 0 = stale
 ```
+
+**Windows: "&lt;brand&gt;: Invalid format string" after Run matching.**
+Fixed. The campaign parser formatted a backfilled date with `%-d`, a directive
+only glibc understands — the Windows C runtime rejects it, and only sheets with a
+blank Date cell to repair ever hit it. Update to the current code; a test now
+fails if any such directive is reintroduced.
+
+**Windows: `Start RELAY.bat` flashes and closes.**
+It shouldn't — every failure path pauses. If it does, open Command Prompt in the
+RELAY folder and run `"Start RELAY.bat"` so the output stays on screen.
 
 **`playwright: command not found`, or "Executable doesn't exist".**
 The browser wasn't installed: `playwright install chromium` (see Route B step 3).

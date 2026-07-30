@@ -12,6 +12,54 @@ from .report.crosscheck import compare, parse_reference
 from .report.generator import build_report
 
 
+def _pick_port(host: str, first: int, tries: int = 20) -> int:
+    """The first free port at or after `first`.
+
+    A double-clicked launcher has no console to read a traceback from, and
+    "address already in use" is the likeliest thing to go wrong on a desktop
+    where RELAY is already running in another window.
+    """
+    import socket
+
+    bind = "127.0.0.1" if host == "0.0.0.0" else host
+    for port in range(first, first + tries):
+        with socket.socket() as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind((bind, port))
+                return port
+            except OSError:
+                continue
+    raise SystemExit(f"no free port between {first} and {first + tries - 1}")
+
+
+def _open_when_ready(host: str, port: int, url: str, timeout: float = 30.0) -> None:
+    """Open a browser once the server actually answers, in the background.
+
+    Opening it before uvicorn is listening shows the user a connection error on
+    the very first thing they see, so this waits for the socket instead of
+    guessing at a delay.
+    """
+    import socket
+    import threading
+    import time
+    import webbrowser
+
+    connect = "127.0.0.1" if host == "0.0.0.0" else host
+
+    def wait():
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((connect, port), timeout=0.5):
+                    webbrowser.open(url)
+                    return
+            except OSError:
+                time.sleep(0.25)
+
+    threading.Thread(target=wait, daemon=True, name="open-browser").start()
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="relay", description="Sponsored-content reporting")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -46,6 +94,16 @@ def main(argv: list[str] | None = None) -> int:
 
     serve = sub.add_parser("serve", help="Start the dashboard")
     serve.add_argument("--port", type=int, default=8501)
+    # Default stays 0.0.0.0 for the container, whose published port needs it.
+    # The Windows launcher passes 127.0.0.1: binding every interface makes
+    # Windows Defender pop a firewall prompt the first time, which is alarming
+    # for a double-click user and buys nothing on a single desktop.
+    serve.add_argument("--host", default="0.0.0.0",
+                       help="interface to bind (default: every interface)")
+    serve.add_argument("--auto-port", action="store_true",
+                       help="if --port is taken, use the next free one")
+    serve.add_argument("--open", action="store_true", dest="open_browser",
+                       help="open the dashboard in a browser once it is listening")
 
     args = p.parse_args(argv)
 
@@ -62,7 +120,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         import uvicorn
         from .web.app import app
-        uvicorn.run(app, host="0.0.0.0", port=args.port)
+        port = _pick_port(args.host, args.port) if args.auto_port else args.port
+        url = f"http://{'localhost' if args.host in ('0.0.0.0', '127.0.0.1') else args.host}:{port}/"
+        print(f"RELAY dashboard: {url}")
+        if args.open_browser:
+            _open_when_ready(args.host, port, url)
+        uvicorn.run(app, host=args.host, port=port)
         return 0
 
     result = run_pipeline(

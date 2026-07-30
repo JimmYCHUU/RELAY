@@ -18,6 +18,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+# built by "Start RELAY.bat"; kept apart from .venv so a checkout shared with a
+# Linux box does not have the two environments fighting over one directory
+.venv-win/
 .pytest_cache/
 .coverage
 htmlcov/
