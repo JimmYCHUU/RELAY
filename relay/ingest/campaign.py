@@ -119,8 +119,13 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
                     or next((rows[j].date for j in range(i + 1, len(rows)) if rows[j].date), None)
                 if fill is not None:
                     cr.date = fill
+                    # `{fill.day}` rather than strftime's `%-d`: the no-pad
+                    # modifier is a glibc extension the Windows C runtime
+                    # rejects outright with "Invalid format string", which the
+                    # dashboard then reported as a bad campaign sheet.
                     issues.append(RowIssue(
-                        fname, cr.source_row, f"empty Date filled from adjacent row ({fill:%-d %b})"))
+                        fname, cr.source_row,
+                        f"empty Date filled from adjacent row ({fill.day} {fill:%b})"))
                 else:
                     issues.append(RowIssue(fname, cr.source_row, "missing Date"))
             if cr.no is None:

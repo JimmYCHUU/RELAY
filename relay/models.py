@@ -53,6 +53,11 @@ class InsightsRow:
     views: Optional[int] = None
     reach: Optional[int] = None
     reactions: Optional[int] = None
+    # Meta's combined "Reactions, comments and shares". Reconstructed from the
+    # three parts only when the export omits the combined column.
+    engagement: Optional[int] = None
+    comments: Optional[int] = None
+    shares: Optional[int] = None
     post_type: str = ""
     is_share: bool = False
     source_file: str = ""
@@ -69,6 +74,15 @@ class CellValue:
     provenance: Provenance
     confidence: float = 1.0
     note: str = ""
+    # Companion figures for the same post, carried alongside the headline value
+    # so the report can print Views / Reach / Engagement side by side. Only ever
+    # set from a Meta export (`resolve.insights_fill`) — a collector reads a
+    # post's view count off the page and has no reach or engagement to offer, and
+    # a manual override is a single typed number. So these stay None for every
+    # cell that did not come from the export, and the report leaves them blank
+    # rather than inventing a figure.
+    reach: Optional[int] = None
+    engagement: Optional[int] = None
 
     @classmethod
     def missing(cls, note: str = "") -> "CellValue":
@@ -86,6 +100,11 @@ class ReportRow:
     # refresh_caption` replaced `caption` with the one the post actually
     # carries. Empty for every row the sheet still describes correctly.
     original_caption: str = ""
+    # Which tab of the campaign workbook this row came from. Set only when
+    # several tabs are merged into one report (`report.merge.merge_runs`), where
+    # it becomes the report's "Source tab" column — a single-tab report has
+    # nothing to disambiguate and carries no such column.
+    source_sheet: str = ""
 
     def link(self, slot: str) -> Optional[str]:
         return self.links.get(slot)

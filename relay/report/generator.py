@@ -26,7 +26,7 @@ from pathlib import Path
 
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 from ..models import RunResult
 from .palette import DEFAULT, derive
@@ -41,19 +41,65 @@ INK = "FF1F2937"
 LINK_BLUE = "FF1155CC"
 
 COL_WIDTHS = {
-    "A": 16.7, "B": 21.7, "C": 31.3, "D": 32.1, "E": 21.0, "F": 27.0, "G": 27.6,
-    "H": 19.6, "I": 25.4, "J": 27.7, "K": 24.6, "L": 25.0, "M": 19.6,
+    "A": 16.7, "B": 21.7, "C": 31.3,
+    "D": 30.0, "E": 15.0, "F": 15.0, "G": 17.0,      # FB link 1 + its three figures
+    "H": 30.0, "I": 15.0, "J": 15.0, "K": 17.0,      # FB link 2
+    "L": 30.0, "M": 15.0, "N": 15.0, "O": 17.0,      # FB link 3
+    "P": 27.7, "Q": 24.6,                            # X
+    "R": 25.0, "S": 19.6,                            # Instagram
+    "T": 20.0,                                       # Source tab (merged reports)
 }
 HEADERS = [
-    "No", "Date", "Content's name", "Content's Link 1", "Views",
-    "Content's Link 2", "Views", "Content's Link 3", "Views",
-    "X, Link 4", "Impressions", "Instagram", "Views",
+    "No", "Date", "Content's name",
+    "Content's Link 1", "Views", "Reach", "Engagement",
+    "Content's Link 2", "Views", "Reach", "Engagement",
+    "Content's Link 3", "Views", "Reach", "Engagement",
+    "X, Link 4", "Impressions",
+    "Instagram", "Views",
 ]
-# (link column, value column) per slot, template order
-SLOT_COLS = {"fb1": (4, 5), "fb2": (6, 7), "fb3": (8, 9), "x": (10, 11), "ig": (12, 13)}
-VALUE_COLS = (5, 7, 9, 11, 13)
+# The link cell for each slot, in template column order.
+LINK_COLS = {"fb1": 4, "fb2": 8, "fb3": 12, "x": 16, "ig": 18}
+# Figure columns per slot. Only Facebook carries all three: Meta's content export
+# publishes Reach and "Reactions, comments and shares" per post, and neither X's
+# public page nor the Instagram export offers an equivalent — so those slots keep
+# their single column rather than showing two permanently empty ones.
+METRIC_COLS = {
+    "fb1": {"views": 5, "reach": 6, "engagement": 7},
+    "fb2": {"views": 9, "reach": 10, "engagement": 11},
+    "fb3": {"views": 13, "reach": 14, "engagement": 15},
+    "x": {"views": 17},
+    "ig": {"views": 19},
+}
+LAST_COL = 19
+# Appended only when a report merges several tabs of one workbook — it says which
+# tab a row came from, the one thing the merge would otherwise lose.
+SOURCE_COL = 20
+SOURCE_HEADER = "Source tab"
+
+VIEW_COLS = tuple(m["views"] for m in METRIC_COLS.values())
+REACH_COLS = tuple(m["reach"] for m in METRIC_COLS.values() if "reach" in m)
+ENGAGEMENT_COLS = tuple(m["engagement"] for m in METRIC_COLS.values() if "engagement" in m)
+NUMERIC_COLS = tuple(sorted(VIEW_COLS + REACH_COLS + ENGAGEMENT_COLS))
+# Where a footer row's label stops and its merged value begins.
+LABEL_SPAN = 3
+VALUE_COL = LABEL_SPAN + 1
+
 DATE_FMT = "d\\ mmm"
 NUM_FMT = "#,##0"
+
+# Excel rejects these in a sheet title and caps it at 31 characters; a brand or
+# tab name is user-supplied text that has no reason to respect either.
+_TITLE_BAD = str.maketrans({c: "-" for c in "[]:*?/\\"})
+
+
+def _safe_title(name: str) -> str:
+    return (name or "Report").translate(_TITLE_BAD).strip("'")[:31] or "Report"
+
+
+def _col_sum(cols, row: int) -> str:
+    """A total across non-adjacent columns — Views, Reach and Engagement
+    interleave per slot, so no single range can add up one metric."""
+    return "=" + "+".join(f"{get_column_letter(c)}{row}" for c in cols)
 
 
 # ── writer ────────────────────────────────────────────────────────────────────
@@ -99,30 +145,44 @@ def build_report(
     f_foot = Font(name="Arial", size=16, bold=True, color="FF" + pal.on_accent)
     left = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
+    # A merged report is the only one whose rows come from more than one tab, so
+    # it is the only one that needs a column saying which.
+    merged = any(r.source_sheet for r in result.rows)
+    last_col = SOURCE_COL if merged else LAST_COL
+    last_letter = get_column_letter(last_col)
+
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = sheet_name or result.month
+    ws.title = _safe_title(sheet_name or result.month)
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A3"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 1
+    # 0 = as many pages tall as it takes. Squeezing the height to one page as
+    # well shrank a merged 206-row report to an unreadable smear; the width is
+    # the only dimension that has to fit, so the columns stay on one sheet and
+    # the rows run on.
+    ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
+    # …with the banner and column headers repeated at the top of each page.
+    ws.print_title_rows = "1:2"
 
     for col, width in COL_WIDTHS.items():
-        ws.column_dimensions[col].width = width
+        if column_index_from_string(col) <= last_col:
+            ws.column_dimensions[col].width = width
 
     # banner: BRAND — Month Year
     year = next((r.date.year for r in result.rows if r.date), None)
     title = f"{result.brand.upper()} — {result.month}" + (f" {year}" if year else "")
-    ws.merge_cells("A1:M1")
-    for col in range(1, 14):
+    ws.merge_cells(f"A1:{last_letter}1")
+    for col in range(1, last_col + 1):
         _write_cell(ws, 1, col, title if col == 1 else None, f_banner,
                     fill=fill_acc, border=no_border)
     ws.row_dimensions[1].height = 52
 
     # header
-    for col, text in enumerate(HEADERS, start=1):
+    headers = HEADERS + ([SOURCE_HEADER] if merged else [])
+    for col, text in enumerate(headers, start=1):
         _write_cell(ws, 2, col, text, f_header, fill=fill_tint,
                     border=header_border)
     ws.row_dimensions[2].height = 34
@@ -141,7 +201,7 @@ def build_report(
                     fmt=DATE_FMT if r.date else None, fill=band, border=border)
         _write_cell(ws, excel_row, 3, r.caption, f_caption, fill=band,
                     border=border, align=left)
-        for slot, (lc, vc) in SLOT_COLS.items():
+        for slot, lc in LINK_COLS.items():
             link = r.link(slot)
             cell = r.cells[slot]
             link_cell = _write_cell(ws, excel_row, lc, link,
@@ -149,43 +209,60 @@ def build_report(
                                     fill=band, border=border)
             if link:
                 link_cell.hyperlink = link
-            _write_cell(ws, excel_row, vc, cell.value, f_data,
-                        fmt=NUM_FMT, fill=band, border=border)
+            for metric, vc in METRIC_COLS[slot].items():
+                # Reach and engagement exist only for a cell the export filled;
+                # a collected or hand-typed figure leaves them blank rather than
+                # implying a zero the post did not report.
+                _write_cell(ws, excel_row, vc, getattr(cell, metric, None)
+                            if metric != "views" else cell.value,
+                            f_data, fmt=NUM_FMT, fill=band, border=border)
+        if merged:
+            _write_cell(ws, excel_row, SOURCE_COL, r.source_sheet, f_caption,
+                        fill=band, border=border)
 
     n = len(result.rows)
     last_data = first_data + n - 1
-    sum_row, total_row, avg_row = last_data + 1, last_data + 2, last_data + 3
+    sum_row = last_data + 1
+    total_row = sum_row + 1          # Total views — the headline, kept first
+    reach_row = sum_row + 2
+    eng_row = sum_row + 3
+    avg_row = sum_row + 4
 
-    # footer: Sum
-    ws.merge_cells(start_row=sum_row, start_column=1, end_row=sum_row, end_column=4)
-    for col in range(1, 14):
+    # footer: Sum — one per figure column, including the new Reach and
+    # Engagement ones, so each column totals itself.
+    ws.merge_cells(start_row=sum_row, start_column=1,
+                   end_row=sum_row, end_column=LABEL_SPAN)
+    for col in range(1, last_col + 1):
         _write_cell(ws, sum_row, col, "Sum" if col == 1 else None, f_sum,
                     fill=fill_tint, border=border)
-    for col in VALUE_COLS:
+    for col in NUMERIC_COLS:
         cl = get_column_letter(col)
-        _write_cell(ws, sum_row, col, f"=SUM({cl}{first_data}:{cl}{last_data})",
+        _write_cell(ws, sum_row, col,
+                    f"=SUM({cl}{first_data}:{cl}{last_data})" if n else 0,
                     f_sum, fmt=NUM_FMT, fill=fill_tint, border=border)
 
-    # footer: Total views
-    ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=4)
-    ws.merge_cells(start_row=total_row, start_column=5, end_row=total_row, end_column=13)
-    for col in range(1, 14):
-        _write_cell(ws, total_row, col, "Total views" if col == 1 else None,
-                    f_foot, fill=fill_acc, border=no_border)
-    _write_cell(ws, total_row, 5, f"=SUM(E{sum_row}:M{sum_row})", f_foot,
-                fmt=NUM_FMT, fill=fill_acc, border=no_border)
-
-    # footer: Average
-    ws.merge_cells(start_row=avg_row, start_column=1, end_row=avg_row, end_column=4)
-    ws.merge_cells(start_row=avg_row, start_column=5, end_row=avg_row, end_column=13)
-    for col in range(1, 14):
-        _write_cell(ws, avg_row, col,
-                    "Average views per content" if col == 1 else None,
-                    f_foot, fill=fill_acc, border=no_border)
-    _write_cell(ws, avg_row, 5, f"=E{total_row}/{n}", f_foot, fmt="0",
-                fill=fill_acc, border=no_border)
-    for rr in (sum_row, total_row, avg_row):
+    # footer: the three grand totals, then the average
+    value_letter = get_column_letter(VALUE_COL)
+    totals = [
+        (total_row, "Total views", _col_sum(VIEW_COLS, sum_row), NUM_FMT),
+        (reach_row, "Total reach (Facebook)", _col_sum(REACH_COLS, sum_row), NUM_FMT),
+        (eng_row, "Total engagement (Facebook)",
+         _col_sum(ENGAGEMENT_COLS, sum_row), NUM_FMT),
+        # n == 0 would make this =D../0 — a #DIV/0! in the sponsor's copy.
+        (avg_row, "Average views per content",
+         f"={value_letter}{total_row}/{n}" if n else 0, "0"),
+    ]
+    for rr, label, formula, fmt in totals:
+        ws.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=LABEL_SPAN)
+        ws.merge_cells(start_row=rr, start_column=VALUE_COL, end_row=rr,
+                       end_column=last_col)
+        for col in range(1, last_col + 1):
+            _write_cell(ws, rr, col, label if col == 1 else None, f_foot,
+                        fill=fill_acc, border=no_border)
+        _write_cell(ws, rr, VALUE_COL, formula, f_foot, fmt=fmt,
+                    fill=fill_acc, border=no_border)
         ws.row_dimensions[rr].height = 28
+    ws.row_dimensions[sum_row].height = 28
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

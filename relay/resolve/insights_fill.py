@@ -71,7 +71,11 @@ def cell_from_insights(row: InsightsRow, metric: str | None = None,
                      if row.is_share else "the export carries no caption for this post")
     if row.reactions is not None:
         parts.append(f"{row.reactions:,} reactions on the export's copy")
-    return CellValue(value, "collected", 1.0, " · ".join(parts))
+    # Reach and engagement ride along from the same export row, so the report's
+    # three Facebook columns are all one post's own figures rather than three
+    # separate joins that could disagree about which post they found.
+    return CellValue(value, "collected", 1.0, " · ".join(parts),
+                     reach=row.reach, engagement=row.engagement)
 
 
 def _by_slug(index: InsightsIndex) -> dict[str, list[InsightsRow]]:

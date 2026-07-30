@@ -1,9 +1,10 @@
 """RELAY dashboard backend (SRS FR-24)."""
 from __future__ import annotations
 
+import logging
 import shutil
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -18,6 +19,7 @@ from ..report.crosscheck import compare, parse_reference
 from ..report.generator import build_report
 
 app = FastAPI(title="RELAY", version="1.0.0")
+log = logging.getLogger("relay.web")
 
 UPLOADS = config.DATA_DIR / "uploads"
 _runs: dict[str, RunResult] = {}
@@ -131,7 +133,15 @@ def run(req: RunReq) -> dict:
             ig_insights_paths=list(req.ig_insights) or None,
         )
     except (ValueError, FileNotFoundError, KeyError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        # A 400 here reads as "your sheet is wrong", so a bug inside the parser
+        # arrives disguised as bad input (a `%-d` strftime on Windows once
+        # surfaced as a bare "Invalid format string"). Log the traceback and
+        # name the tab, so the next one is diagnosable from the message alone.
+        log.exception("run failed: sheet=%r campaign=%s", req.sheet, req.campaign)
+        detail = str(exc) or type(exc).__name__
+        if req.sheet and req.sheet not in detail:
+            detail = f"sheet '{req.sheet}': {detail}"
+        raise HTTPException(400, detail) from exc
     inputs = req.model_dump()
     # Resume: inherit values a previous run of the same campaign/sheet/brand
     # already collected (checkpointed per cell), so a crash, power-off, or
@@ -408,9 +418,71 @@ def autopilot_stop() -> dict:
     return {"stopping": True}
 
 
-class BatchReportReq(BaseModel):
+class ReportGroup(BaseModel):
+    """One delivered workbook. Several run ids means several tabs of one
+    brand's campaign sheet folded into a single continuous report."""
     run_ids: list[str] = Field(min_length=1)
+    label: str | None = None
+
+
+class BatchReportReq(BaseModel):
+    # Either shape works: `groups` for the merge-aware dashboard, a flat
+    # `run_ids` for the older callers and the CLI, where each run is its own
+    # workbook exactly as before.
+    groups: list[ReportGroup] = Field(default_factory=list)
+    run_ids: list[str] = Field(default_factory=list)
     comments: bool = True
+
+    def resolved(self) -> list[ReportGroup]:
+        if self.groups:
+            return self.groups
+        if self.run_ids:
+            return [ReportGroup(run_ids=[rid]) for rid in self.run_ids]
+        raise HTTPException(400, "no runs to report on")
+
+
+_REPORT_SUFFIXES = (".xlsx", ".zip")
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _safe_output(name: str) -> Path:
+    """Resolve a generated-report filename inside OUTPUT_DIR, or refuse it.
+
+    Checked as a *Windows* path on every platform: a backslash separates
+    directories only on Windows, so `PurePosixPath("sub\\x.xlsx").name` returns
+    the whole string and a guard written against the running platform would let
+    "sub\\x.xlsx" through on the Linux box and mean something else on the
+    supervisor's desktop.
+    """
+    if PureWindowsPath(name).name != name \
+            or PureWindowsPath(name).suffix.lower() not in _REPORT_SUFFIXES:
+        raise HTTPException(400, "bad report name")
+    return config.OUTPUT_DIR / name
+
+
+def _build_group(group: ReportGroup) -> Path:
+    """Write one workbook for a group of runs and return its path."""
+    from ..report.merge import merge_runs
+
+    results = [_get_run(rid) for rid in group.run_ids]
+    brands = {r.brand for r in results}
+    if len(brands) > 1:
+        raise HTTPException(
+            400, f"cannot merge different brands into one workbook: "
+                 f"{', '.join(sorted(brands))}")
+    merged = merge_runs(results, group.label)
+    out = config.OUTPUT_DIR / f"{merged.brand} ({merged.month}).xlsx"
+    build_report(merged, out)
+    for rid in group.run_ids:
+        store.set_output(_run_db_ids[rid], str(out))
+    return out
+
+
+@app.post("/api/report/group")
+def generate_group(group: ReportGroup) -> dict:
+    """One workbook for one brand, merging every tab in the group."""
+    out = _build_group(group)
+    return {"path": str(out), "name": out.name}
 
 
 @app.post("/api/report/batch")
@@ -419,14 +491,9 @@ def generate_batch(req: BatchReportReq) -> dict:
     bundled into a zip for the user."""
     import zipfile
 
-    results = [_get_run(rid) for rid in req.run_ids]
-    paths = []
-    for rid, result in zip(req.run_ids, results):
-        out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
-        build_report(result, out)
-        store.set_output(_run_db_ids[rid], str(out))
-        paths.append(out)
-    month = results[0].month
+    groups = req.resolved()
+    paths = [_build_group(g) for g in groups]
+    month = _get_run(groups[0].run_ids[0]).month
     zpath = config.OUTPUT_DIR / f"RELAY reports ({month}).zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in paths:
@@ -434,11 +501,22 @@ def generate_batch(req: BatchReportReq) -> dict:
     return {"name": zpath.name, "workbooks": [p.name for p in paths]}
 
 
+@app.get("/api/report/download/{name}")
+def download_named(name: str):
+    """Download any generated workbook or archive by filename — a merged report
+    belongs to several runs, so no single run id addresses it."""
+    path = _safe_output(name)
+    if not path.exists():
+        raise HTTPException(404, "report not generated yet")
+    media = "application/zip" if path.suffix.lower() == ".zip" else _XLSX_MEDIA
+    return FileResponse(path, media_type=media, filename=name)
+
+
 @app.get("/api/report/batch/download/{name}")
 def download_batch(name: str):
-    if "/" in name or ".." in name or not name.endswith(".zip"):
+    path = _safe_output(name)
+    if path.suffix.lower() != ".zip":
         raise HTTPException(400, "bad archive name")
-    path = config.OUTPUT_DIR / name
     if not path.exists():
         raise HTTPException(404, "archive not generated yet")
     return FileResponse(path, media_type="application/zip", filename=name)
@@ -459,11 +537,7 @@ def download(run_id: str):
     out = config.OUTPUT_DIR / f"{result.brand} ({result.month}).xlsx"
     if not out.exists():
         raise HTTPException(404, "report not generated yet")
-    return FileResponse(
-        out,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=out.name,
-    )
+    return FileResponse(out, media_type=_XLSX_MEDIA, filename=out.name)
 
 
 _meta_login = {"running": False, "error": None}

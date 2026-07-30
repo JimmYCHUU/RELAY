@@ -43,6 +43,21 @@ INSIGHTS_HEADERS = {
     # "likes" last: on a Facebook export "Likes and reactions" must still win, and
     # exact matches are claimed before any substring pass (see resolve_headers).
     "reactions":  ("reactions", "post reactions", "likes and reactions", "likes"),
+    # Engagement is Meta's own combined column, not a figure RELAY adds up — the
+    # export already publishes reactions + comments + shares as one number and
+    # that is the one a sponsor can check against Business Suite. `comments` and
+    # `shares` are carried only so the combined figure can still be reconstructed
+    # from an export that omits it (older files, some IG exports).
+    #
+    # These three sit after "reactions" deliberately. The exact pass claims a
+    # column before any substring pass sees it, so "Reactions, comments and
+    # shares" is taken by `engagement` and "Reactions" by `reactions`, whichever
+    # order they appear in the file.
+    "engagement": ("reactions, comments and shares", "reactions, comments, and shares",
+                   "likes, comments and shares", "engagement", "post engagement",
+                   "total engagement", "interactions"),
+    "comments":   ("comments", "post comments"),
+    "shares":     ("shares", "post shares", "reshares"),
     "post_type":  ("post type", "type", "media type"),
     "is_share":   ("is share", "shared post"),
 }
