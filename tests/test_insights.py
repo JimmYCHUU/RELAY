@@ -406,6 +406,58 @@ def test_inference_never_puts_two_slots_on_one_page(tmp_path):
     assert run.rows[0].cells["fb2"].value == 6542, "main page was already taken"
 
 
+SONGBAD = "https://www.facebook.com/somoysongbad360/posts/"
+THREE_PAGE_STORY = TWO_PAGE_STORY + (
+    f'2003,100084045740327,"সময় সংবাদ","{STORY}","06/03/2026 10:07",'
+    f'{SONGBAD}pfbid0EXPORTC,0,Photos,6245,4267,60,50,6\n'
+)
+
+
+def test_a_confident_slot_frees_the_page_its_neighbour_could_not_choose(tmp_path):
+    """Ruchi June row 69. Link 2 is split near-evenly between two subpages, so
+    on its own it can never clear the dominance bar — but Link 3 takes one of
+    them outright, and one post per page per row leaves Link 2 only one page it
+    could possibly be on. Nothing is left to be wrong about, so it fills."""
+    index = build_index([_csv(tmp_path, THREE_PAGE_STORY)])
+    album = "https://www.facebook.com/photo?fbid=%s&set=a.130548286423362"
+    rows = [({"fb1": f"{MAIN}pfbid0SHEETSIDE",
+              "fb2": album % "1043508205127361",
+              "fb3": album % "122365967318004167"}, STORY, JUNE3)]
+    # Link 2: 4 sports against 3 songbad — neither is 3x the other.
+    # Link 3: 6 sports against 1 songbad — sports wins outright.
+    habit = [("fb2", SPORT)] * 4 + [("fb2", SONGBAD)] * 3 \
+        + [("fb3", SPORT)] * 6 + [("fb3", SONGBAD)] * 1
+    for i, (slot, page) in enumerate(habit):
+        rows.append(({"fb1": f"{MAIN}pfbid0J{i}", slot: f"{page}pfbid0K{i}"},
+                     f"ভিন্ন একটি খবর যা রপ্তানিতে নেই {i}", JUNE3))
+    run = _sheet(rows)
+
+    assert fill_from_insights(run, index, metric="views") == 3
+    row = run.rows[0]
+    assert row.cells["fb3"].value == 6542, "Link 3 wins its page outright"
+    assert row.cells["fb2"].value == 6245, "so Link 2's only remaining page is its own"
+    assert "page inferred as somoysongbad360" in row.cells["fb2"].note
+
+
+def test_a_shaky_slot_never_frees_a_page_for_its_neighbour(tmp_path):
+    """The converse guard: when neither page-less slot clears the bar, no slot
+    may claim a page on the strength of the other's guess. Both stay empty."""
+    index = build_index([_csv(tmp_path, THREE_PAGE_STORY)])
+    album = "https://www.facebook.com/photo?fbid=%s&set=a.130548286423362"
+    rows = [({"fb1": f"{MAIN}pfbid0SHEETSIDE",
+              "fb2": album % "15476243", "fb3": album % "15476244"}, STORY, JUNE3)]
+    habit = [("fb2", SPORT)] * 4 + [("fb2", SONGBAD)] * 3 \
+        + [("fb3", SPORT)] * 3 + [("fb3", SONGBAD)] * 2
+    for i, (slot, page) in enumerate(habit):
+        rows.append(({"fb1": f"{MAIN}pfbid0L{i}", slot: f"{page}pfbid0M{i}"},
+                     f"ভিন্ন একটি খবর যা রপ্তানিতে নেই {i}", JUNE3))
+    run = _sheet(rows)
+
+    assert fill_from_insights(run, index, metric="views") == 1, "Link 1 only"
+    assert run.rows[0].cells["fb2"].value is None
+    assert run.rows[0].cells["fb3"].value is None
+
+
 # --- the export's own boilerplate tail ---
 
 BUDGET = "দাম কমতে পারে যেসব পণ্যের এবারের বাজেট প্রস্তাবে"
@@ -464,6 +516,64 @@ def test_a_page_running_one_story_twice_is_refused_not_ranked(tmp_path):
     assert fill_from_insights(run, index, metric="views") == 0
     assert run.rows[0].cells["fb1"].value is None
     assert any("same story twice" in i.reason for i in run.issues)
+
+
+# --- one post, several exports ---
+#
+# Meta's export ranges overlap freely and the user downloads them as they go, so
+# a real set covered Jun 8-14, Jun 11-17, Jun 15-21 and Jun 10-Jul 30 at once.
+# 12,223 of 40,024 posts arrived more than once, each wearing a *different*
+# pfbid permalink — and the caption join, seeing two rows, called every one of
+# them a page that had run the story twice.
+
+# The same post read on two days: the later download has accrued a few views,
+# and Meta has re-minted the pfbid in the permalink.
+DUP_EARLY = (f'2001,900,"সময় সংবাদ","{STORY}","06/03/2026 10:00",'
+             f'{PAGE}pfbid0EARLYREAD,0,Photos,298967,195650,50,40,5\n')
+DUP_LATER = (f'2001,900,"সময় সংবাদ","{STORY}","06/03/2026 10:00",'
+             f'{PAGE}pfbid0LATERREAD,0,Photos,298978,195653,50,40,5\n')
+
+
+def test_a_post_in_two_overlapping_exports_stays_one_post(tmp_path):
+    index = build_index([_csv(tmp_path, DUP_EARLY, name="jun08-14.csv"),
+                         _csv(tmp_path, DUP_LATER, name="jun11-17.csv")])
+
+    assert len(index) == 1
+    assert index.rows[0].views == 298978, "every figure is lifetime — the larger is the later"
+    assert index.rows[0].reach == 195653, "reach comes from that same reading"
+
+
+def test_the_superseded_reading_stops_resolving(tmp_path):
+    """The stale row's permalink differs from its replacement's, so dropping it
+    means deleting its key rather than overwriting one."""
+    index = build_index([_csv(tmp_path, DUP_EARLY, name="a.csv"),
+                         _csv(tmp_path, DUP_LATER, name="b.csv")])
+
+    assert index.lookup(f"{PAGE}pfbid0EARLYREAD") is None
+    assert index.lookup(f"{PAGE}pfbid0LATERREAD").views == 298978
+    assert index.lookup_post_id("2001").views == 298978
+
+
+def test_a_reading_without_views_never_displaces_one_that_has_them(tmp_path):
+    blank = (f'2001,900,"সময় সংবাদ","{STORY}","06/03/2026 10:00",'
+             f'{PAGE}pfbid0NOFIGURES,0,Photos,,,50,40,5\n')
+    index = build_index([_csv(tmp_path, DUP_LATER, name="a.csv"),
+                         _csv(tmp_path, blank, name="b.csv")])
+
+    assert len(index) == 1
+    assert index.rows[0].views == 298978
+
+
+def test_a_duplicated_post_is_not_a_page_running_one_story_twice(tmp_path):
+    """The cost of the duplicate: the caption join scored the post against its
+    own twin, tied, and refused the cell that the export could account for."""
+    index = build_index([_csv(tmp_path, DUP_EARLY, name="jun08-14.csv"),
+                         _csv(tmp_path, DUP_LATER, name="jun11-17.csv")])
+    run = _sheet([({"fb1": f"{PAGE}pfbid0SHEETSIDE"}, STORY, JUNE3)])
+
+    assert fill_from_insights(run, index, metric="views") == 1
+    assert run.rows[0].cells["fb1"].value == 298978
+    assert not any("same story twice" in i.reason for i in run.issues)
 
 
 # --- a figure has to explain itself ---
