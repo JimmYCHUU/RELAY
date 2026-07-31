@@ -110,3 +110,93 @@ def test_autopilot_unknown_run_is_404(client):
 
 def test_autopilot_stop_when_idle(client):
     assert client.post("/api/autopilot/stop").json() == {"stopping": False}
+
+
+# --- the pacing budget no longer needs a human to restart it ---
+#
+# `SESSION_NAV_BUDGET` is a counter on one Pacer, not a quota that refills on a
+# clock: restarting by hand always handed the collector 200 more immediately, so
+# the manual restart was never the safety measure. The pause is. Autopilot now
+# takes the pause itself and carries on.
+
+def _budget_then(halts: int, calls: list, halt: str = "budget"):
+    """A collector that runs out of budget `halts` times, then finishes."""
+    def fake(result, pacer=None, progress=None, persist=None, **kw):
+        calls.append(result.brand)
+        progress.filled = 1
+        if len(calls) <= halts:
+            progress.state, progress.halt = "stopped", halt
+            progress.message = "session budget of 200 navigations reached"
+        else:
+            progress.state, progress.message = "finished", "done"
+        return progress.filled
+    return fake
+
+
+@pytest.fixture()
+def fast_cooldown(monkeypatch):
+    from relay import config
+    monkeypatch.setattr(config, "NAV_BUDGET_COOLDOWN_S", 0.05)
+    monkeypatch.setattr(config, "NAV_BUDGET_MAX_LAPS", 2)
+
+
+def _drain(client, ids, tries=200):
+    for _ in range(tries):
+        s = client.get(f"/api/autopilot/status?ids={','.join(ids)}").json()
+        if s["state"] in ("finished", "error", "stopped"):
+            return s
+        time.sleep(0.05)
+    return s
+
+
+def test_autopilot_waits_out_the_budget_and_resumes_itself(
+        client, two_runs, fast_cooldown, monkeypatch):
+    from relay.collectors import runner
+    calls = []
+    monkeypatch.setattr(runner, "resolve_facebook", _budget_then(2, calls))
+    monkeypatch.setattr(runner, "collect_instagram", _budget_then(0, []))
+    monkeypatch.setattr(runner, "collect_x", _budget_then(0, []))
+
+    client.post("/api/autopilot", json={"run_ids": two_runs[:1], "dry_run": True})
+    s = _drain(client, two_runs[:1])
+
+    assert s["state"] == "finished", s
+    assert len(calls) == 3, "two budget halts, two cooldowns, then a clean finish"
+    # 3 Facebook bursts + Instagram + X, each filling one. Counting only the
+    # last burst of a resumed collector would report 3.
+    assert "5 cells filled" in s["message"]
+    assert any("carrying on by itself" in e for e in s["events"])
+
+
+def test_autopilot_stops_dead_on_a_challenge_page(
+        client, two_runs, fast_cooldown, monkeypatch):
+    """A checkpoint page is the account asking to be left alone. Coming back on
+    a timer is the exact behaviour it is watching for, so nothing resumes."""
+    from relay.collectors import runner
+    calls = []
+    monkeypatch.setattr(runner, "resolve_facebook",
+                        _budget_then(9, calls, halt="challenge"))
+    monkeypatch.setattr(runner, "collect_instagram", _budget_then(0, []))
+    monkeypatch.setattr(runner, "collect_x", _budget_then(0, []))
+
+    client.post("/api/autopilot", json={"run_ids": two_runs[:1], "dry_run": True})
+    s = _drain(client, two_runs[:1])
+
+    assert s["state"] == "stopped", s
+    assert len(calls) == 1, "no second burst after a challenge"
+
+
+def test_autopilot_gives_up_after_its_last_allowed_burst(
+        client, two_runs, fast_cooldown, monkeypatch):
+    from relay.collectors import runner
+    calls = []
+    monkeypatch.setattr(runner, "resolve_facebook", _budget_then(99, calls))
+    monkeypatch.setattr(runner, "collect_instagram", _budget_then(0, []))
+    monkeypatch.setattr(runner, "collect_x", _budget_then(0, []))
+
+    client.post("/api/autopilot", json={"run_ids": two_runs[:1], "dry_run": True})
+    s = _drain(client, two_runs[:1])
+
+    assert s["state"] == "stopped", s
+    assert len(calls) == 3, "the first burst plus NAV_BUDGET_MAX_LAPS more"
+    assert any("bursts used" in e for e in s["events"])

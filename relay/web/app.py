@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 import uuid
 from pathlib import Path, PureWindowsPath
 
@@ -293,6 +294,9 @@ class AutopilotJob:
         self.state = "running"           # running | finished | stopped | error
         self.message = ""
         self.stop_requested = False
+        # Wall-clock the current pacing cooldown ends at, 0 when not cooling.
+        # The job stays "running" through it so the Stop button still bites.
+        self.cooling_until = 0.0
         self.events: list[str] = []
 
     def log(self, line: str) -> None:
@@ -350,6 +354,54 @@ def autopilot_start(req: AutopilotReq) -> dict:
     }
     labels = {"fb": "Facebook", "ig": "Instagram", "x": "X"}
 
+    def cool_off(target: str, lap: int) -> bool:
+        """Sit out the pacing cooldown, then hand the platform a fresh budget.
+
+        The budget is a counter on one Pacer, not a quota that refills on a
+        clock, so nothing is being waited *for* — restarting by hand always gave
+        200 more immediately. What the ceiling actually buys is a bound on how
+        long one unbroken burst of navigation runs, and that is only worth
+        anything if the gap is really taken. So the gap is taken here, and the
+        user stops having to sit by the dashboard to press the button that was
+        never the safety measure.
+        """
+        mins = config.NAV_BUDGET_COOLDOWN_S / 60
+        job.log(f"{labels[target]} budget spent (burst {lap} of "
+                f"{config.NAV_BUDGET_MAX_LAPS + 1}) — pausing {mins:.0f} min, "
+                "then carrying on by itself")
+        job.cooling_until = time.time() + config.NAV_BUDGET_COOLDOWN_S
+        job.message = f"pacing pause — {labels[target]} resumes in {mins:.0f} min"
+        while time.time() < job.cooling_until and not job.stop_requested:
+            time.sleep(1)
+        job.cooling_until = 0.0
+        if job.stop_requested:
+            return False
+        pacers[target].visits = 0
+        job.message = ""
+        return True
+
+    def run_target(result, target) -> tuple[int, Progress]:
+        """One platform's collector, resumed across as many cooldowns as its
+        remaining cells need. Each pass re-scans for cells that are still empty,
+        so a resumed collector picks up exactly where the last one ran out.
+
+        Returns the cells filled across every burst, not just the last one."""
+        got = 0
+        for lap in range(1, config.NAV_BUDGET_MAX_LAPS + 2):
+            sub = Progress()
+            job.target, job.sub = target, sub
+            collectors[target](result, sub)
+            got += sub.filled
+            job.log(f"{result.brand} · {labels[target]}: {sub.message}")
+            if sub.halt != "budget" or job.stop_requested:
+                return got, sub
+            if lap > config.NAV_BUDGET_MAX_LAPS:
+                job.log(f"{labels[target]}: {lap} bursts used — stopping for now")
+                return got, sub
+            if not cool_off(target, lap):
+                return got, sub
+        return got, sub
+
     def work():
         filled = 0
         try:
@@ -363,14 +415,12 @@ def autopilot_start(req: AutopilotReq) -> dict:
                 for target in ("fb", "ig", "x"):
                     if job.stop_requested:
                         break
-                    sub = Progress()
-                    job.target, job.sub = target, sub
-                    collectors[target](result, sub)
-                    filled += sub.filled
-                    job.log(f"{result.brand} · {labels[target]}: {sub.message}")
+                    got, sub = run_target(result, target)
+                    filled += got
                     if sub.state == "stopped" and not sub.stop_requested:
-                        # pacing budget or challenge page — halt the whole
-                        # cycle; a later re-run picks up the remaining cells
+                        # A challenge page, or the budget after every burst it
+                        # was allowed — halt the cycle; a later re-run picks up
+                        # the remaining cells.
                         job.state, job.message = "stopped", sub.message
                         return
             if job.stop_requested:
@@ -402,6 +452,10 @@ def autopilot_status(ids: str = "") -> dict:
         "campaigns": job.campaigns, "target": job.target,
         "total": sub.total if sub else 0, "done": sub.done if sub else 0,
         "filled": sub.filled if sub else 0, "current": sub.current if sub else "",
+        # Seconds left of a pacing pause, 0 when collecting. The job is still
+        # "running" here — without this the dashboard shows a live job that has
+        # visited nothing for a quarter of an hour and looks wedged.
+        "cooling": max(0, round(job.cooling_until - time.time())) if job.cooling_until else 0,
         "events": events[-8:],
         "runs": runs,
     }
