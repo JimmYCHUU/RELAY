@@ -107,7 +107,17 @@ REPAIR_SIBLING_WINDOW_MIN = 90
 PACE_MIN_S, PACE_MAX_S = 8.0, 15.0          # authenticated FB/MBS session — do not lower
 X_PACE_MIN_S, X_PACE_MAX_S = 2.5, 5.0       # anonymous public X pages: no account exists to
                                             # flag; only IP-level rate limits apply
-SESSION_NAV_BUDGET = 200
+SESSION_NAV_BUDGET = int(os.environ.get("RELAY_NAV_BUDGET", 200))
+# Nothing refills the budget on a timer — it is a counter on one Pacer, and a
+# fresh run starts a fresh one. What the 200 really buys is a ceiling on how
+# long a single unbroken burst of Facebook navigation lasts: at PACE_MIN_S..
+# PACE_MAX_S that is roughly 27-50 minutes. Autopilot can now sit out a
+# cooldown and carry on by itself rather than making the user restart it; the
+# pause is the part that matters for account safety, not the restart.
+NAV_BUDGET_COOLDOWN_S = float(os.environ.get("RELAY_NAV_COOLDOWN_S", 900))
+# How many further bursts autopilot may take before it stops for good. 0 keeps
+# the old behaviour: exhaust the budget once and halt.
+NAV_BUDGET_MAX_LAPS = int(os.environ.get("RELAY_NAV_MAX_LAPS", 6))
 CHALLENGE_MARKERS = ("checkpoint", "captcha", "login_attempt", "suspicious")
 # Relaunch the persistent Meta context after this many page visits: a single
 # Chromium context navigated through hundreds of heavy MBS/IG SPA pages grows

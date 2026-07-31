@@ -1006,8 +1006,12 @@ async function pollAutopilot() {
   el.fill.style.width = pct + "%";
   el.count.textContent = s.total ? `${s.done}/${s.total} visited · ${s.filled} filled` : "";
   if (s.state === "running") {
-    el.text.textContent = s.target
-      ? `Collecting ${AP_LABELS[s.target]} for ${s.brand}…` : "Starting…";
+    // A pacing pause is a quarter of an hour of deliberate silence. Say so and
+    // count it down, or the run reads as wedged and gets stopped by hand.
+    el.text.textContent = s.cooling
+      ? `Pacing pause — ${AP_LABELS[s.target]} resumes in ${fmtWait(s.cooling)}. `
+        + "Autopilot carries on by itself."
+      : s.target ? `Collecting ${AP_LABELS[s.target]} for ${s.brand}…` : "Starting…";
   }
   if (s.events?.length) {
     el.log.innerHTML = s.events.slice().reverse()
@@ -1222,6 +1226,13 @@ document.addEventListener("mousemove", (e) => {
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (ch) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+/* A countdown reads as stalled in bare seconds once it passes a minute. */
+function fmtWait(secs) {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  return `${m}m ${String(secs % 60).padStart(2, "0")}s`;
 }
 
 /* ═════════ review body: master–detail list or table ═════════ */

@@ -446,6 +446,25 @@ That's deliberate (`relay/collectors/base.py`): 200 navigations per session, and
 an immediate stop on any captcha/checkpoint. Your login is preserved — rerun
 later and it picks up where it left off from the SQLite checkpoint.
 
+Autopilot no longer needs that rerun to be yours. When the budget runs out it
+waits `RELAY_NAV_COOLDOWN_S` (default 15 min), hands the platform a fresh
+budget and carries on, up to `RELAY_NAV_MAX_LAPS` further bursts (default 6 —
+about 1,400 Facebook visits in a hands-free cycle). A **checkpoint page never
+resumes**: that one is the account asking to be left alone, and returning on a
+timer is what it is watching for.
+
+| Variable | Default | What it changes |
+| --- | --- | --- |
+| `RELAY_NAV_BUDGET` | `200` | Visits in one burst before the pause |
+| `RELAY_NAV_COOLDOWN_S` | `900` | How long the pause lasts |
+| `RELAY_NAV_MAX_LAPS` | `6` | Extra bursts before autopilot stops for good (`0` = old behaviour) |
+
+Raise the *cooldown* before you raise the *budget*. The budget was never a
+quota that refilled on a clock — restarting by hand always gave you 200 more
+immediately — so what it actually buys is a ceiling on how long one unbroken
+run of Facebook navigation lasts (~27–50 min at the 8–15 s pacing). The gap
+between bursts is the part that protects the account.
+
 ## Tests
 
 ```bash

@@ -22,6 +22,11 @@ class Progress:
     state: str = "running"           # running | finished | stopped | error
     message: str = ""
     stop_requested: bool = False     # set by the dashboard's Stop button
+    # Why a stopped collector stopped: "budget" | "challenge" | "" (the user).
+    # Autopilot resumes itself after a budget halt and never after a challenge
+    # one — a checkpoint page is the account asking to be left alone, and
+    # coming back on a timer is the exact behaviour it is watching for.
+    halt: str = ""
     events: list[str] = field(default_factory=list)
 
     def log(self, line: str) -> None:
@@ -117,7 +122,7 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
                 else:
                     p.log(f"{tag(run)}row {row.no}: {cell.note}")
     except BudgetExceeded as exc:
-        p.state, p.message = "stopped", str(exc)
+        p.state, p.message, p.halt = "stopped", str(exc), "budget"
         return filled
     except Exception as exc:
         log.exception("x collection aborted")
@@ -295,6 +300,7 @@ def resolve_facebook(result: RunResult | list[RunResult], pacer: Pacer | None = 
                 p.done += 1
     except (BudgetExceeded, ChallengeDetected) as exc:
         p.state, p.message = "stopped", str(exc)
+        p.halt = "budget" if isinstance(exc, BudgetExceeded) else "challenge"
         return filled
     except Exception as exc:
         log.exception("facebook resolution aborted")
@@ -374,6 +380,7 @@ def collect_instagram(result: RunResult | list[RunResult], pacer: Pacer | None =
                 p.filled = filled
     except (BudgetExceeded, ChallengeDetected) as exc:
         p.state, p.message = "stopped", str(exc)
+        p.halt = "budget" if isinstance(exc, BudgetExceeded) else "challenge"
         return filled
     except Exception as exc:
         log.exception("instagram collection aborted")

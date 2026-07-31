@@ -223,6 +223,15 @@ def _infer_pages(unknown: list[str], hits: list[tuple[float, InsightsRow]],
     A slot is only filled when its winning page outweighs the nearest rival by
     `config.SLOT_PAGE_DOMINANCE`; a close call means several Somoy pages ran the
     story and the sheet gives no reason to prefer one, so it stays empty.
+
+    Rivals are settled one slot at a time, because "one post per page per row"
+    removes candidates as it goes. Ruchi's June sheet is the case that forced
+    it: Link 2 points at somoytvsports 54 times and somoysongbad360 47, so no
+    page can ever outweigh the other 3x there. But when Link 3 takes
+    somoytvsports outright (50 against 13), somoysongbad360 is the only page
+    left that the row's own links have not already claimed — and a slot with no
+    rival left has nothing to be wrong about. Scoring every slot against the
+    full page list at once declined a cell the row itself had already decided.
     """
     available: list[str] = []
     for _, row in hits:
@@ -240,13 +249,32 @@ def _infer_pages(unknown: list[str], hits: list[tuple[float, InsightsRow]],
         if sum(weights) > best_weight:
             best, best_weight = dict(zip(unknown, combo)), sum(weights)
 
-    out = {}
-    for slot, slug in best.items():
-        rivals = [pages[slot].get(other, 0) for other in available if other != slug]
-        top = max(rivals, default=0)
-        if top == 0 or pages[slot][slug] >= config.SLOT_PAGE_DOMINANCE * top:
-            out[slot] = slug
+    out: dict[str, str] = {}
+    pending, claimed = dict(best), set()
+    while pending:
+        # Only a slot that clears the bar outright may claim its page, so a
+        # shaky assignment never clears the field for the slot beside it.
+        settled = [slot for slot, slug in pending.items()
+                   if _dominant(pages[slot], slug, available, claimed)]
+        if not settled:
+            break
+        for slot in settled:
+            out[slot] = pending.pop(slot)
+            claimed.add(out[slot])
     return out
+
+
+def _dominant(seen: Counter, slug: str, available: list[str],
+              claimed: set[str]) -> bool:
+    """Whether this slot's winning page outweighs every page still in contention.
+
+    A page another slot has already claimed is not in contention: the row cannot
+    put two of its links on one page, so that page is no longer an alternative
+    reading of this one.
+    """
+    top = max((seen.get(other, 0) for other in available
+               if other != slug and other not in claimed), default=0)
+    return top == 0 or seen[slug] >= config.SLOT_PAGE_DOMINANCE * top
 
 
 def fill_from_insights(
