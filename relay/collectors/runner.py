@@ -75,7 +75,7 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
               persist: PersistCb = None) -> int:
     """Fill X impression cells from public status pages — logged-out browser,
     no credentials ever (C-3). Returns cells filled."""
-    from .browser import anonymous_page
+    from .browser import anonymous_session
     from .xpublic import collect_x_views, extract_tweet_text
 
     runs = _as_runs(result)
@@ -100,10 +100,14 @@ def collect_x(result: RunResult | list[RunResult], pacer: Pacer | None = None,
 
     filled = 0
     try:
-        with anonymous_page() as page:
+        with anonymous_session() as sess:
             for run, idx, row in targets:
                 if p.stop_requested:
                     break
+                # A fresh page every X_CONTEXT_RECYCLE_EVERY visits: this is the
+                # longest batch of the cycle, and one page held open for all of
+                # it grows until the machine swaps.
+                page = sess.page()
                 url = row.links["x"]
                 p.current = url
                 cell = collect_x_views(page, url, pacer)

@@ -44,6 +44,8 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></symbol>
   <symbol id="i-unlink" viewBox="0 0 24 24"><path d="m18.8 12.3 1.7-1.7a5 5 0 0 0-7.1-7.1l-1.7 1.7"/><path d="m5.2 11.7-1.7 1.7a5 5 0 0 0 7.1 7.1l1.7-1.7"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
 </svg>
 
 <div class="app">
@@ -344,7 +346,13 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
   </div>
 
   <!-- curvy connected tabs = which brand's workspace; segments inside = filters -->
-  <div class="tabbar" id="brandTabs" role="tablist" aria-label="Brand"></div>
+  <div class="tabstrip">
+    <button class="tabstrip-nav prev" data-scroll="-1" aria-label="Scroll tabs left" tabindex="-1">
+      <svg class="ic-svg"><use href="#i-chevron-left"/></svg></button>
+    <div class="tabbar" id="brandTabs" role="tablist" aria-label="Brand"></div>
+    <button class="tabstrip-nav next" data-scroll="1" aria-label="Scroll tabs right" tabindex="-1">
+      <svg class="ic-svg"><use href="#i-chevron-right"/></svg></button>
+  </div>
   <div class="review-panel">
     <div class="panel-toolbar">
       <div class="tabs seg-filter" role="group" aria-label="Row filter">
@@ -383,7 +391,13 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     banner, live Sum / Total / Average formulas, styling and all.</p>
   </header>
 
-  <div class="tabbar" id="brandTabsReport" role="tablist" aria-label="Brand"></div>
+  <div class="tabstrip">
+    <button class="tabstrip-nav prev" data-scroll="-1" aria-label="Scroll tabs left" tabindex="-1">
+      <svg class="ic-svg"><use href="#i-chevron-left"/></svg></button>
+    <div class="tabbar" id="brandTabsReport" role="tablist" aria-label="Brand"></div>
+    <button class="tabstrip-nav next" data-scroll="1" aria-label="Scroll tabs right" tabindex="-1">
+      <svg class="ic-svg"><use href="#i-chevron-right"/></svg></button>
+  </div>
   <div class="brand-panel">
   <div class="tiles" id="reportTiles"></div>
 

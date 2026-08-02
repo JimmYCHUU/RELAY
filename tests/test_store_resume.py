@@ -88,11 +88,15 @@ def _fake_x(monkeypatch, views=111):
     import relay.collectors.browser as browser
     import relay.collectors.xpublic as xpublic
 
-    @contextmanager
-    def fake_page():
-        yield object()
+    class FakeSession:
+        def page(self):
+            return object()
 
-    monkeypatch.setattr(browser, "anonymous_page", fake_page)
+    @contextmanager
+    def fake_session(recycle_every=None):
+        yield FakeSession()
+
+    monkeypatch.setattr(browser, "anonymous_session", fake_session)
     monkeypatch.setattr(xpublic, "collect_x_views",
                         lambda page, url, pacer: CellValue(views, "collected", 1.0, "t"))
 
@@ -171,6 +175,75 @@ def test_meta_session_recycles(monkeypatch, tmp_path):
     assert len(launched) == 2 and launched[0].closed and not launched[1].closed
     sess.close()
     assert launched[1].closed
+
+
+def test_anonymous_session_recycles_too(monkeypatch):
+    """X is the collector with the most visits to make in a cycle — 427 against
+    Facebook's 150 in a real July — and it was the one holding a single page
+    open for all of them."""
+    import relay.collectors.browser as browser
+
+    class FakePage:
+        def route(self, *a, **k):
+            pass
+
+    class FakeBrowser:
+        def __init__(self):
+            self.closed = False
+
+        def new_page(self, **kw):
+            return FakePage()
+
+        def close(self):
+            self.closed = True
+
+    launched = []
+
+    class FakeChromium:
+        def launch(self, **kw):
+            b = FakeBrowser()
+            launched.append(b)
+            return b
+
+    class FakePW:
+        chromium = FakeChromium()
+
+    monkeypatch.setattr(browser, "_executable", lambda: None)
+    sess = browser.AnonymousSession(FakePW(), headed=False, recycle_every=2)
+    a = sess.page()
+    assert sess.page() is a and len(launched) == 1
+    sess.page()                       # third visit crosses the threshold
+    assert len(launched) == 2 and launched[0].closed and not launched[1].closed
+    sess.close()
+    assert launched[1].closed
+
+
+def test_collect_x_asks_the_session_for_a_page_every_visit(monkeypatch):
+    """Recycling only happens if the collector re-asks — holding one page in a
+    local variable is exactly the bug this replaced."""
+    from relay.collectors.base import Pacer
+    from relay.collectors.runner import collect_x
+    import relay.collectors.browser as browser
+    import relay.collectors.xpublic as xpublic
+
+    asked = []
+
+    class FakeSession:
+        def page(self):
+            asked.append(1)
+            return object()
+
+    @contextmanager
+    def fake_session(recycle_every=None):
+        yield FakeSession()
+
+    monkeypatch.setattr(browser, "anonymous_session", fake_session)
+    monkeypatch.setattr(xpublic, "collect_x_views",
+                        lambda page, url, pacer: CellValue(5, "collected", 1.0, "t"))
+    pacer = Pacer()
+    pacer._sleep = lambda s: None
+    collect_x(make_result(3), pacer=pacer)
+    assert len(asked) == 3, "one page request per post, not one for the batch"
 
 
 def test_override_preserves_a_dashboard_estimate_s_provenance(tmp_path):
