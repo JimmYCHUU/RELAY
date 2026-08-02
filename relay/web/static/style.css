@@ -322,6 +322,25 @@ input:disabled, select:disabled {
   background: radial-gradient(circle 12px at 100% 0,
     transparent 10.4px, var(--grid) 10.5px 11.8px, var(--surface) 11.9px);
 }
+/* Remove-campaign ✕. It sits over the tab's own right padding rather than
+   inside the tab element — a button nested in a button never receives its
+   clicks — so the curvy joins above are untouched. */
+.ctab-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.ctab-wrap .ctab { padding-right: 34px; }
+.ctab-x {
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  width: 21px; height: 21px; padding: 0; display: grid; place-items: center;
+  border: 0; background: transparent; color: var(--ink-2); border-radius: 7px;
+  opacity: 0; z-index: 1;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.ctab-x .ic-svg { width: 13px; height: 13px; }
+.ctab-wrap:hover .ctab-x,
+.ctab-wrap.active .ctab-x,
+.ctab-x:focus-visible { opacity: 1; }
+.ctab-x:hover { background: var(--critical-soft); color: var(--critical); }
+.ctab-x:active { transform: translateY(-50%) scale(0.9); }
+
 .review-panel {
   background: var(--surface); border: 1px solid var(--grid); border-radius: 14px;
   box-shadow: var(--shadow); min-height: 380px; overflow: hidden;
@@ -715,6 +734,24 @@ button.cell-edit:hover { border-color: var(--accent); color: var(--accent); back
   border-radius: 12px; padding: 12px 16px;
 }
 .issues li { margin: 2px 0; }
+.issues-head { display: flex; align-items: center; gap: 8px; }
+.issues-count {
+  font-variant-numeric: tabular-nums; font-weight: 650; font-size: 11.5px;
+  padding: 1px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+/* Scrolled, not grown: a long sheet's notes used to push Continue to report
+   off the bottom of the page. */
+.issues-list {
+  margin: 8px 0 0; padding-left: 20px;
+  max-height: 190px; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--warning) 45%, transparent) transparent;
+}
+.issues-list::-webkit-scrollbar { width: 8px; }
+.issues-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--warning) 45%, transparent); border-radius: 8px;
+}
 .stage-foot { margin-top: 20px; display: flex; justify-content: flex-end; }
 
 /* ═════════ report ═════════ */
@@ -817,6 +854,26 @@ dialog label { margin: 12px 0; }
 dialog input[type="range"] { min-width: 0; accent-color: var(--accent); }
 dialog menu { display: flex; justify-content: flex-end; gap: 10px; padding: 0; margin: 16px 0 0; }
 dialog .tabs { margin: 12px 0 4px; }
+/* Reach and engagement sit side by side under Views — they are the same post's
+   figures, read off the same screen, not a second task. */
+/* minmax(0,…) and min-width:0 — a bare 1fr floors at the input's intrinsic
+   width (~20 characters), which two abreast overflow the dialog. */
+.metric-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.metric-pair label { margin: 0; min-width: 0; }
+.metric-pair input { min-width: 0; }
+.metric-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+.dead-link {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid);
+}
+.dead-link .sub { font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+button.ghost.danger {
+  border-color: color-mix(in srgb, var(--critical) 40%, transparent);
+  color: var(--critical);
+}
+button.ghost.danger:not([disabled]):hover {
+  border-color: var(--critical); background: var(--critical-soft);
+}
 .tooltip {
   position: fixed; z-index: 30; pointer-events: none;
   background: var(--ink); color: var(--panel);

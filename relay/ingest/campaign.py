@@ -16,6 +16,15 @@ from ..models import CampaignRow, RowIssue
 
 _EMPTY_RUN_STOP = 15  # consecutive empty rows = end of data (sheets have ~900 styled blanks)
 
+# What sponsors call the row-number column. Every one of these sits in front of
+# the same `Date | Content's name | Content's Link …` run, so the column's name
+# is the least reliable thing about the header — Grameenphone's own workbook
+# says "No" on its April tab and " SL" on May through August, and requiring the
+# literal "No" left five months of that sponsor unreadable.
+# Compared after dots and spaces are stripped, so "S. No" and "sl." land here too.
+_NO_ALIASES = {"no", "sl", "slno", "serial", "serialno", "sr", "srno",
+               "sno", "sn", "#", "id", "index"}
+
 
 def list_sheets(path: str | Path) -> list[str]:
     wb = openpyxl.load_workbook(path, read_only=True)
@@ -24,13 +33,78 @@ def list_sheets(path: str | Path) -> list[str]:
     return names
 
 
-def _find_header(ws) -> int | None:
-    for row in ws.iter_rows(min_row=1, max_row=10):
-        a = row[0].value
-        joined = " ".join(str(c.value) for c in row[:8] if c.value)
-        if isinstance(a, str) and a.strip().lower() == "no" and "content" in joined.lower():
-            return row[0].row
+def _find_header(ws) -> tuple[int, dict] | None:
+    """The header row and what each of its columns holds.
+
+    The row is recognised by what follows the first column, not by the first
+    column itself: "Content's Link" beside a "Date" is a campaign header and
+    nothing else in these workbooks looks like one. The first cell then only has
+    to be plausible as a row-number heading — one of `_NO_ALIASES`, or blank,
+    which several tabs leave it.
+    """
+    for row in ws.iter_rows(min_row=1, max_row=10, max_col=_HEADER_SCAN_COLS):
+        cells = [str(c.value).strip() if c.value is not None else "" for c in row]
+        joined = " ".join(c for c in cells if c).lower()
+        if "content" not in joined or "date" not in joined:
+            continue
+        first = cells[0].lower().replace(".", "").replace(" ", "")
+        # A named first column is evidence in itself; a blank one leans entirely
+        # on the Date + Content pair above, which is why that pair is required.
+        if not first or first in _NO_ALIASES:
+            return row[0].row, (_columns(cells) or dict(_FIXED))
     return None
+
+
+"""Column roles, keyed to the header's own words rather than to a position.
+
+`Content's Link 4 X` and `X, Link 4` are the same column under two spellings, and
+both contain "link", so X and Instagram are claimed before the generic link
+sweep sees them.
+"""
+_HEADER_SCAN_COLS = 14      # wide enough for the trailing Total Count / notes
+
+
+def _is_x_header(h: str) -> bool:
+    return (h == "x" or h.startswith("x,") or h.startswith("x ")
+            or h.endswith(" x") or ", x" in h or "twitter" in h)
+
+
+def _columns(cells: list[str]) -> dict | None:
+    """Which column holds what, or None when the header does not say.
+
+    Positions are not fixed across sponsors. Tecno POVA's June tab leaves one
+    blank column between Link 1 and Link 2, and reading by position shifted
+    every column after it along by one: the sheet's Link 3 was taken for the X
+    post, its X post for the Instagram one, and the real Instagram column — the
+    last of the row — was never read at all. So a Facebook URL was delivered in
+    the report's X column, and 30 Instagram cells came back empty against an
+    export that had every one of them.
+    """
+    out: dict = {"date": None, "caption": None, "x": None, "ig": None, "fb": []}
+    for i, raw in enumerate(cells):
+        h = raw.lower().strip()
+        if not h:
+            continue
+        if out["date"] is None and h.startswith("date"):
+            out["date"] = i
+        elif out["caption"] is None and "content" in h and "name" in h:
+            out["caption"] = i
+        elif out["ig"] is None and "instagram" in h:
+            out["ig"] = i
+        elif out["x"] is None and _is_x_header(h):
+            out["x"] = i
+        elif "link" in h and len(out["fb"]) < 3:
+            out["fb"].append(i)
+    # Anything less is a header this function has misread, and guessing from
+    # half a mapping is worse than the fixed positions that got us here.
+    if out["caption"] is None or len(out["fb"]) < 2:
+        return None
+    return out
+
+
+# The layout every sponsor but one actually uses, and the fallback for a header
+# `_columns` cannot make sense of.
+_FIXED = {"date": 1, "caption": 2, "fb": [3, 4, 5], "x": 6, "ig": 7}
 
 
 def _cell_str(v) -> str | None:
@@ -57,20 +131,34 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
                 f"Sheet '{sheet}' not found in {Path(path).name}; available: {wb.sheetnames}"
             )
         ws = wb[sheet]
-        header = _find_header(ws)
-        if header is None:
+        found = _find_header(ws)
+        if found is None:
             raise ValueError(f"Header row not found in sheet '{sheet}' of {Path(path).name}")
+        header, cols = found
+        # Only as far as the columns the header actually named — a tab can carry
+        # a "Total Count" and a block of notes past its last link column.
+        last_col = max([c for c in (cols["date"], cols["caption"], cols["x"],
+                                    cols["ig"], *cols["fb"]) if c is not None]) + 1
+
+        def at(row, key):
+            """One mapped cell of a data row, or None when the tab has no such
+            column — Grameenphone's tabs carry no Instagram link at all."""
+            i = cols[key]
+            return row[i].value if i is not None and i < len(row) else None
 
         rows: list[CampaignRow] = []
         issues: list[RowIssue] = []
         fname = Path(path).name
         empty_run = 0
 
-        for row in ws.iter_rows(min_row=header + 1, max_col=8):
+        for row in ws.iter_rows(min_row=header + 1, max_col=last_col):
             r = row[0].row
-            no, date, caption = row[0].value, row[1].value, _cell_str(row[2].value)
-            links = [_link_str(row[i].value) for i in (3, 4, 5)]
-            x_link, ig_link = _link_str(row[6].value), _link_str(row[7].value)
+            no, date = row[0].value, at(row, "date")
+            caption = _cell_str(at(row, "caption"))
+            links = [_link_str(row[i].value) if i < len(row) else None
+                     for i in cols["fb"]]
+            links += [None] * (3 - len(links))       # a tab with only two link columns
+            x_link, ig_link = _link_str(at(row, "x")), _link_str(at(row, "ig"))
 
             if not caption and not any(links) and not x_link and not ig_link:
                 empty_run += 1
@@ -81,13 +169,20 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
 
             # Some sheets keep an internal category-count row right under the
             # header ("Category A | 35 | Category B | 35 | …"): text/numbers parked
-            # in the link columns, no No, no Date, no URL anywhere. Company-side
+            # in the link columns, no Date, no URL anywhere. Company-side
             # bookkeeping, not campaign data — drop it from the run.
-            link_junk = any(_cell_str(row[i].value) for i in (3, 4, 5, 6, 7))
-            if (_cell_str(no) is None and not isinstance(date, datetime)
+            #
+            # Its No cell is blank on some sheets and holds the first category's
+            # own name on others ("GP Bundle", "1 Poisha/Sec>>"), so the test is
+            # that No is not a number rather than that it is empty — otherwise
+            # Grameenphone's every tab opened with a content row captioned "46".
+            link_junk = any(_cell_str(row[i].value) for i in range(3, len(row)))
+            numbered = isinstance(no, (int, float)) and not isinstance(no, bool)
+            if (not numbered and not isinstance(date, datetime)
                     and link_junk and not any(links) and not x_link and not ig_link):
                 issues.append(RowIssue(
-                    fname, r, "category-count row ignored (text in link columns, no URL/No/Date)"))
+                    fname, r, "category-count row ignored (text in link columns, no URL/No/Date)",
+                    where=f"sheet row {r}"))
                 continue
 
             if not caption:
@@ -95,18 +190,21 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
                 # is skipped, and collectors/manual entry fill the views —
                 # collectors also recover the caption from the post itself
                 issues.append(RowIssue(
-                    fname, r, "caption empty — row kept; views fill from the post links"))
+                    fname, r, "caption empty — row kept; views fill from the post links",
+                    where=f"sheet row {r}"))
                 caption = ""
 
             if isinstance(no, float):
                 no = int(no)
             if not isinstance(no, int):
                 if no is not None:
-                    issues.append(RowIssue(fname, r, f"non-numeric No '{no}' ignored"))
+                    issues.append(RowIssue(fname, r, f"non-numeric No '{no}' ignored",
+                                           where=f"sheet row {r}"))
                 no = None
             if not isinstance(date, datetime):
                 if date is not None:
-                    issues.append(RowIssue(fname, r, f"unreadable Date '{date}'"))
+                    issues.append(RowIssue(fname, r, f"unreadable Date '{date}'",
+                                           where=f"sheet row {r}"))
                 date = None
 
             rows.append(CampaignRow(no, date, caption, links, x_link, ig_link, source_row=r))
@@ -125,9 +223,11 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
                     # dashboard then reported as a bad campaign sheet.
                     issues.append(RowIssue(
                         fname, cr.source_row,
-                        f"empty Date filled from adjacent row ({fill.day} {fill:%b})"))
+                        f"empty Date filled from adjacent row ({fill.day} {fill:%b})",
+                        where=f"sheet row {cr.source_row}"))
                 else:
-                    issues.append(RowIssue(fname, cr.source_row, "missing Date"))
+                    issues.append(RowIssue(fname, cr.source_row, "missing Date",
+                                           where=f"sheet row {cr.source_row}"))
             if cr.no is None:
                 cr.no = (rows[i - 1].no + 1) if i and rows[i - 1].no is not None else i + 1
         return rows, issues

@@ -258,7 +258,8 @@ def resolve_facebook(result: RunResult | list[RunResult], pacer: Pacer | None = 
                                       "no post id can resolve a page that is not there"
                                       if slug and not index.covers(slug) else
                                       "the post was reached but its id is in none of "
-                                      "the supplied exports, so this cell stays empty")
+                                      "the supplied exports, so this cell stays empty",
+                                      row_idx)
                             continue
 
                         cell = cell_from_insights(hit, how=_BY_POST_ID)
