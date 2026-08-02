@@ -78,6 +78,35 @@ _PHOTO_SET_PAGE = re.compile(r"^pb\.(\d{6,})\b")
 _PHOTO_ROUTES = ("photo", "photo.php")
 
 
+_X_HOSTS = ("x.com", "twitter.com")
+_IG_HOSTS = ("instagram.com",)
+
+
+def link_platform(url: str | None) -> str | None:
+    """Which platform a link addresses — 'fb', 'x', 'ig' — or None if unknown.
+
+    Campaign sheets are filled in by hand and the X and Instagram columns sit
+    side by side, so the two get crossed. A link in the wrong column can never
+    be matched: each platform's join uses a key the other's URLs do not carry,
+    so an Instagram post filed under X is not a wrong figure but a permanently
+    empty cell. `ingest.campaign` uses this to put each link back.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    if "//" not in raw:
+        raw = "https://" + raw.lstrip("/")
+    host = urlsplit(raw).netloc.lower().split("@")[-1].split(":")[0]
+    for prefix in _HOST_PREFIXES:
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+            break
+    for hosts, name in ((_FB_HOSTS, "fb"), (_X_HOSTS, "x"), (_IG_HOSTS, "ig")):
+        if any(host == h or host.endswith("." + h) for h in hosts):
+            return name
+    return None
+
+
 def is_share_link(url: str | None) -> bool:
     """A facebook.com/share/… short link, which must be resolved to a real
     permalink before it can be looked up (see `mbs.resolve_share_link`)."""
