@@ -12,6 +12,7 @@ from pathlib import Path
 
 import openpyxl
 
+from ..matching.permalink import ig_shortcode, link_platform
 from ..models import CampaignRow, RowIssue
 
 _EMPTY_RUN_STOP = 15  # consecutive empty rows = end of data (sheets have ~900 styled blanks)
@@ -105,6 +106,70 @@ def _columns(cells: list[str]) -> dict | None:
 # The layout every sponsor but one actually uses, and the fallback for a header
 # `_columns` cannot make sense of.
 _FIXED = {"date": 1, "caption": 2, "fb": [3, 4, 5], "x": 6, "ig": 7}
+
+
+# Which platform each column is for. Insertion order is the order a rehomed
+# link looks for a free column, so a stray Facebook link fills Link 1 first.
+_SLOT_PLATFORM = {"fb1": "fb", "fb2": "fb", "fb3": "fb", "x": "x", "ig": "ig"}
+_SLOT_LABEL = {"fb1": "Link 1", "fb2": "Link 2", "fb3": "Link 3",
+               "x": "the X column", "ig": "the Instagram column"}
+_PLATFORM_NAME = {"fb": "a Facebook", "x": "an X", "ig": "an Instagram"}
+# Where a link of each platform belongs, for the note when it cannot get there.
+_HOME_SLOT = {"fb": "fb1", "x": "x", "ig": "ig"}
+
+
+def _same_post(a: str | None, b: str | None) -> bool:
+    """Whether two URLs address the same post, ignoring how they were copied.
+
+    Instagram's own copy-link button appends a tracking suffix, so the same reel
+    pasted twice rarely matches character for character.
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    ca, cb = ig_shortcode(a), ig_shortcode(b)
+    return bool(ca) and ca == cb
+
+
+def _rehome(slots: dict[str, str | None]) -> tuple[dict[str, str | None], list, list]:
+    """Put each link in the column its own URL names.
+
+    The X and Instagram columns sit side by side in a hand-filled sheet, so the
+    two get crossed — and a crossed link is not a wrong figure but a permanently
+    empty cell, because each platform's join uses a key the other's URLs do not
+    carry. An Instagram post filed under X matches nothing, for ever.
+
+    Returns the corrected slots, the moves made, and the links that could not be
+    moved. Nothing is ever lost: a link whose own column is already taken by a
+    *different* post stays where the sheet put it and is reported instead, since
+    overwriting the one already there would drop a link the sponsor supplied. A
+    link whose own column already holds *the same* post is a double paste, and
+    only that copy is dropped.
+    """
+    platform = {s: link_platform(u) if u else None for s, u in slots.items()}
+    misplaced = [s for s, p in platform.items() if p and p != _SLOT_PLATFORM[s]]
+    if not misplaced:
+        return slots, [], []
+    # Vacate every misplaced column first, so two crossed links swap cleanly
+    # rather than the first one moved overwriting the second.
+    out = {s: (None if s in misplaced else u) for s, u in slots.items()}
+    moves, stranded, stuck = [], [], []
+    for src in misplaced:
+        home = [t for t, p in _SLOT_PLATFORM.items() if p == platform[src]]
+        dest = next((t for t in home if not out[t]), None)
+        if dest:
+            out[dest] = slots[src]
+            moves.append((src, dest))
+        elif any(_same_post(out[t], slots[src]) for t in home):
+            stranded.append((src, platform[src], True))     # double paste
+        else:
+            stuck.append(src)
+            stranded.append((src, platform[src], False))
+    for src in stuck:
+        if not out[src]:
+            out[src] = slots[src]
+    return out, moves, stranded
 
 
 def _cell_str(v) -> str | None:
@@ -206,6 +271,31 @@ def parse_campaign(path: str | Path, sheet: str) -> tuple[list[CampaignRow], lis
                     issues.append(RowIssue(fname, r, f"unreadable Date '{date}'",
                                            where=f"sheet row {r}"))
                 date = None
+
+            # Put any crossed link back in its own platform's column, before
+            # anything tries to match it.
+            homed, moves, stranded = _rehome(
+                {"fb1": links[0], "fb2": links[1], "fb3": links[2],
+                 "x": x_link, "ig": ig_link})
+            for src, dest in moves:
+                site = _PLATFORM_NAME[_SLOT_PLATFORM[dest]]
+                issues.append(RowIssue(
+                    fname, r,
+                    f"{_SLOT_LABEL[src]} held {site} link — read as {_SLOT_LABEL[dest]}",
+                    where=f"sheet row {r}"))
+            for src, plat, duplicate in stranded:
+                site = _PLATFORM_NAME[plat]
+                issues.append(RowIssue(
+                    fname, r,
+                    f"{_SLOT_LABEL[src]} held {site} link — the same post is already "
+                    f"in {_SLOT_LABEL[_HOME_SLOT[plat]]}, so this copy is left out"
+                    if duplicate else
+                    f"{_SLOT_LABEL[src]} holds {site} link and "
+                    f"{_SLOT_LABEL[_HOME_SLOT[plat]]} is already taken by another post "
+                    "— left where the sheet has it; move it by hand",
+                    where=f"sheet row {r}"))
+            links = [homed["fb1"], homed["fb2"], homed["fb3"]]
+            x_link, ig_link = homed["x"], homed["ig"]
 
             rows.append(CampaignRow(no, date, caption, links, x_link, ig_link, source_row=r))
 

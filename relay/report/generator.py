@@ -28,6 +28,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import column_index_from_string, get_column_letter
 
+from ..matching.permalink import is_share_link, post_token
 from ..models import RunResult
 from .palette import DEFAULT, derive
 
@@ -59,6 +60,8 @@ HEADERS = [
 ]
 # The link cell for each slot, in template column order.
 LINK_COLS = {"fb1": 4, "fb2": 8, "fb3": 12, "x": 16, "ig": 18}
+# The three Facebook column groups, left to right.
+FB_COLUMNS = ("fb1", "fb2", "fb3")
 # Figure columns per slot. Only Facebook carries all three: Meta's content export
 # publishes Reach and "Reactions, comments and shares" per post, and neither X's
 # public page nor the Instagram export offers an equivalent — so those slots keep
@@ -94,6 +97,46 @@ _TITLE_BAD = str.maketrans({c: "-" for c in "[]:*?/\\"})
 
 def _safe_title(name: str) -> str:
     return (name or "Report").translate(_TITLE_BAD).strip("'")[:31] or "Report"
+
+
+def _names_a_post(url: str | None) -> bool:
+    """Whether a link identifies a Facebook post at all.
+
+    A share link does once resolved; a bare page profile, or an Instagram URL
+    someone pasted into a Facebook column, never will — so it can only ever sit
+    beside three empty figures.
+    """
+    return bool(url) and (is_share_link(url) or post_token(url) is not None)
+
+
+def _fb_order(row) -> list[str]:
+    """Which slot each Facebook column shows, left to right.
+
+    The delivered columns are "Content's Link 1 / 2 / 3" — plain positions with
+    no page attached to them — so a row whose main-page post was never made
+    opened on an empty link and three empty figures, with the real post sitting
+    in Link 2. A sponsor reads that as a hole in the report rather than as a
+    post that was never published.
+
+    Only the first column is closed up, and by a swap: the first slot that does
+    name a post moves into Link 1, and whatever Link 1 held takes its place. So
+    nothing is dropped — a link the sheet supplied is still delivered, just not
+    at the head of the row — and the two later columns keep the sheet's own
+    order. A gap between Link 2 and Link 3 is left alone; it is not what a
+    reader's eye lands on first.
+
+    The review screen deliberately keeps the sheet's order throughout, where
+    FB 1 means the main page and which page a figure came from is the point.
+    """
+    order = list(FB_COLUMNS)
+    if _names_a_post(row.link(order[0])):
+        return order
+    donor = next((i for i in range(1, len(order))
+                  if _names_a_post(row.link(order[i]))), None)
+    if donor is None:
+        return order                          # nothing to promote
+    order[0], order[donor] = order[donor], order[0]
+    return order
 
 
 def _col_sum(cols, row: int) -> str:
@@ -201,7 +244,12 @@ def build_report(
                     fmt=DATE_FMT if r.date else None, fill=band, border=border)
         _write_cell(ws, excel_row, 3, r.caption, f_caption, fill=band,
                     border=border, align=left)
-        for slot, lc in LINK_COLS.items():
+        # Each Facebook column shows whichever slot `_fb_order` puts there, and
+        # that slot's three figures travel with its link. X and Instagram have a
+        # column each and never move.
+        shown = list(zip(FB_COLUMNS, _fb_order(r))) + [("x", "x"), ("ig", "ig")]
+        for col_slot, slot in shown:
+            lc = LINK_COLS[col_slot]
             link = r.link(slot)
             cell = r.cells[slot]
             link_cell = _write_cell(ws, excel_row, lc, link,
@@ -209,7 +257,7 @@ def build_report(
                                     fill=band, border=border)
             if link:
                 link_cell.hyperlink = link
-            for metric, vc in METRIC_COLS[slot].items():
+            for metric, vc in METRIC_COLS[col_slot].items():
                 # Reach and engagement exist only for a cell the export filled;
                 # a collected or hand-typed figure leaves them blank rather than
                 # implying a zero the post did not report.
