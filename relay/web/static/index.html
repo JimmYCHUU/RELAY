@@ -42,6 +42,8 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
   <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v4h4M8.5 13h7M8.5 17h5"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.7 1.7"/><path d="M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.7-1.7"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-unlink" viewBox="0 0 24 24"><path d="m18.8 12.3 1.7-1.7a5 5 0 0 0-7.1-7.1l-1.7 1.7"/><path d="m5.2 11.7-1.7 1.7a5 5 0 0 0 7.1 7.1l1.7-1.7"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></symbol>
 </svg>
 
 <div class="app">
@@ -472,14 +474,47 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
     <a id="cellLink" class="iconlink" target="_blank" rel="noopener" hidden>
       <svg class="ic-svg"><use href="#i-external"/></svg> open the post to read its numbers</a>
     <div class="tab-pane" data-pane="manual">
-      <label>Views value
+      <label>Views
         <input id="manualValue" type="number" min="0" placeholder="exact number">
       </label>
+      <!-- Facebook only: Meta publishes all three figures per post and the
+           report has a column for each. X and Instagram have no equivalent. -->
+      <div id="fbMetrics" hidden>
+        <div class="metric-pair">
+          <label>Viewers (reach)
+            <input id="manualReach" type="number" min="0" placeholder="exact number">
+          </label>
+          <label>Engagement
+            <input id="manualEngagement" type="number" min="0" placeholder="exact number">
+          </label>
+        </div>
+        <p class="metric-hint">Both sit beside Views on the post's own Business Suite
+          page — reach counts people, engagement counts reactions, comments and shares.</p>
+      </div>
+    </div>
+    <!-- the post is gone from the platform but the sheet still lists it -->
+    <div class="dead-link" id="deadLinkRow" hidden>
+      <button type="button" id="removeLinkBtn" class="ghost danger">
+        <svg class="ic-svg"><use href="#i-unlink"/></svg> Remove this link from the sheet</button>
+      <span class="sub">For a post that no longer exists — the slot stops counting as
+        missing and the workbook leaves it blank.</span>
     </div>
     <menu>
       <button value="cancel" class="ghost">Cancel</button>
       <button value="apply-next" class="ghost">Apply → next missing</button>
       <button value="apply" id="cellApply" class="primary">Apply</button>
+    </menu>
+  </form>
+</dialog>
+
+<!-- confirm dialog — window.confirm() has no place in this shell -->
+<dialog id="confirmDialog">
+  <form method="dialog">
+    <h3 id="confirmTitle">Are you sure?</h3>
+    <p id="confirmBody" class="hint"></p>
+    <menu>
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="ok" id="confirmOk" class="primary">Confirm</button>
     </menu>
   </form>
 </dialog>

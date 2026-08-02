@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     for slot, frac in cov.items():
         print(f"  {slot}: {frac:.0%} of linked cells filled")
     for issue in result.issues:
-        print(f"  ! {issue.file} row {issue.row}: {issue.reason}", file=sys.stderr)
+        where = f" {issue.where}" if issue.where else ""
+        print(f"  ! {issue.file}{where}: {issue.reason}", file=sys.stderr)
 
     out = Path(args.out) if args.out else config.OUTPUT_DIR / f"{args.brand} ({args.sheet}).xlsx"
     build_report(result, out)

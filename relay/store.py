@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config
-from .models import CellValue, RunResult
+from .models import LINK_REMOVED_NOTE, CellValue, RunResult
 
 # row_no is intentionally NOT unique: campaign sheets are hand-filled, so No
 # can repeat or be blank. Row identity for the audit log is positional, not the
@@ -26,10 +26,27 @@ CREATE TABLE IF NOT EXISTS cells (
     provenance TEXT NOT NULL,
     confidence REAL NOT NULL,
     note TEXT,
-    row_idx INTEGER
+    row_idx INTEGER,
+    reach INTEGER,
+    engagement INTEGER,
+    removed_link TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_cells_key ON cells (run_id, row_no, slot);
 """
+
+# Columns added after the table shipped; each is ALTERed in on an existing DB.
+_CELLS_ADDED = (
+    ("row_idx", "INTEGER"),
+    # Reach and engagement ride along with the headline figure. Without them a
+    # resume, or a hand-typed pair, came back as a bare view count and the
+    # report's Reach / Engagement columns silently emptied themselves.
+    ("reach", "INTEGER"),
+    ("engagement", "INTEGER"),
+    # The URL a person struck off this slot by hand because the post is gone
+    # from the platform. Kept rather than merely blanked so the removal can be
+    # re-applied to a fresh run of the same sheet — which still lists the link.
+    ("removed_link", "TEXT"),
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -65,10 +82,11 @@ def _connect(db_path: str | Path | None = None) -> sqlite3.Connection:
         conn.execute("ALTER TABLE runs ADD COLUMN summary TEXT")
     except sqlite3.OperationalError:
         pass
-    try:  # migrate databases created before the row_idx column existed
-        conn.execute("ALTER TABLE cells ADD COLUMN row_idx INTEGER")
-    except sqlite3.OperationalError:
-        pass
+    for name, sqltype in _CELLS_ADDED:
+        try:  # migrate a database created before this column existed
+            conn.execute(f"ALTER TABLE cells ADD COLUMN {name} {sqltype}")
+        except sqlite3.OperationalError:
+            pass
     _migrate_cells(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS ix_cells_pos ON cells (run_id, row_idx, slot)")
     return conn
@@ -112,10 +130,11 @@ def save_run(result: RunResult, inputs: dict, db_path: str | Path | None = None)
         )
         run_id = cur.lastrowid
         conn.executemany(
-            f"INSERT INTO cells ({_CELLS_COLUMNS}, row_idx) VALUES (?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO cells ({_CELLS_COLUMNS}, row_idx, reach, engagement) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
                 (run_id, r.no, slot, r.links.get(slot), c.value, c.provenance,
-                 c.confidence, c.note, idx)
+                 c.confidence, c.note, idx, c.reach, c.engagement)
                 for idx, r in enumerate(result.rows) for slot, c in r.cells.items()
             ],
         )
@@ -127,10 +146,11 @@ def update_cell(run_id: int, row_idx: int, slot: str, cell: CellValue,
     """Checkpoint one collected cell so a crash mid-collection loses nothing."""
     with _connect(db_path) as conn:
         conn.execute(
-            "UPDATE cells SET value=?, provenance=?, confidence=?, note=? "
+            "UPDATE cells SET value=?, provenance=?, confidence=?, note=?, "
+            "reach=?, engagement=? "
             "WHERE run_id=? AND row_idx=? AND slot=?",
             (cell.value, cell.provenance, cell.confidence, cell.note,
-             run_id, row_idx, slot),
+             cell.reach, cell.engagement, run_id, row_idx, slot),
         )
 
 
@@ -140,7 +160,8 @@ def load_cells(run_id: int, db_path: str | Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT row_idx, slot, link, value, provenance, confidence, note "
+            "SELECT row_idx, slot, link, value, provenance, confidence, note, "
+            "reach, engagement "
             "FROM cells WHERE run_id=? AND row_idx IS NOT NULL "
             "AND value IS NOT NULL "
             "AND provenance IN ('collected','estimated','manual')",
@@ -166,9 +187,47 @@ def hydrate_cells(result: RunResult, cells: list[dict]) -> int:
         if row.cells[slot].value is not None:
             continue
         row.cells[slot] = CellValue(c["value"], c["provenance"],
-                                    c["confidence"], c["note"])
+                                    c["confidence"], c["note"],
+                                    reach=c.get("reach"),
+                                    engagement=c.get("engagement"))
         restored += 1
     return restored
+
+
+def load_removed_links(run_id: int, db_path: str | Path | None = None) -> list[dict]:
+    """Links a person struck off this run by hand, with the URL each replaced."""
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT row_idx, slot, removed_link FROM cells "
+            "WHERE run_id=? AND row_idx IS NOT NULL AND removed_link IS NOT NULL",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def apply_removed_links(result: RunResult, removals: list[dict]) -> int:
+    """Re-strike links a person already removed once, on a fresh run.
+
+    The campaign sheet still lists the post — that is the whole point of the
+    feature, that nobody went back and deleted the link — so a re-run puts it
+    straight back and the cell goes back to reading as outstanding work. Only a
+    slot whose link is still character-for-character the one that was struck is
+    re-struck: a changed link is a different post and deserves its own look.
+    """
+    removed = 0
+    for r in removals:
+        idx = r["row_idx"]
+        if idx is None or idx >= len(result.rows):
+            continue
+        row = result.rows[idx]
+        slot = r["slot"]
+        if slot not in row.cells or row.links.get(slot) != r["removed_link"]:
+            continue
+        row.links[slot] = None
+        row.cells[slot] = CellValue.missing(LINK_REMOVED_NOTE)
+        removed += 1
+    return removed
 
 
 def _run_key(inputs: dict) -> tuple:
@@ -200,26 +259,61 @@ def find_resumable_run(inputs: dict, db_path: str | Path | None = None) -> int |
 
 def record_override(run_id: int, row_no: int, slot: str, old, new,
                     db_path: str | Path | None = None,
-                    cell: CellValue | None = None) -> None:
+                    cell: CellValue | None = None,
+                    row_idx: int | None = None) -> None:
     """Log a dashboard edit and write the new value through.
 
-    `cell` carries the value's real provenance. Without it this defaulted to
-    'manual'/1.0, which silently relabelled dashboard *estimates* as
-    hand-entered values — they then came back from a resume without their ≈
-    marking and with false confidence.
+    `cell` carries the value's real provenance, and now its reach and
+    engagement. Without it this defaulted to 'manual'/1.0, which silently
+    relabelled dashboard *estimates* as hand-entered values — they then came
+    back from a resume without their ≈ marking and with false confidence.
+
+    `row_idx` addresses the row by position. A campaign sheet's No is
+    hand-filled and can repeat, so keying the write on it wrote one person's
+    typed figure into every row that happens to share that number. Callers that
+    know the position pass it; the row_no fallback is what the CLI and the older
+    tests use, where No is unique.
     """
     provenance = cell.provenance if cell is not None else "manual"
     confidence = cell.confidence if cell is not None else 1.0
     note = cell.note if cell is not None else "manual entry"
+    reach = cell.reach if cell is not None else None
+    engagement = cell.engagement if cell is not None else None
+    where, key = ("row_idx", row_idx) if row_idx is not None else ("row_no", row_no)
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO overrides VALUES (?,?,?,?,?,?)",
             (run_id, row_no, slot, old, new, datetime.now(timezone.utc).isoformat()),
         )
         conn.execute(
-            "UPDATE cells SET value=?, provenance=?, confidence=?, note=? "
-            "WHERE run_id=? AND row_no=? AND slot=?",
-            (new, provenance, confidence, note, run_id, row_no, slot),
+            "UPDATE cells SET value=?, provenance=?, confidence=?, note=?, "
+            f"reach=?, engagement=? WHERE run_id=? AND {where}=? AND slot=?",
+            (new, provenance, confidence, note, reach, engagement,
+             run_id, key, slot),
+        )
+
+
+def record_link_removal(run_id: int, row_no: int, slot: str, url: str,
+                        old_value: int | None = None, row_idx: int | None = None,
+                        db_path: str | Path | None = None) -> None:
+    """Log that a link was struck off by hand and blank the cell behind it.
+
+    The URL is kept in `removed_link` rather than thrown away: the campaign
+    sheet still carries it, so a re-run of the same sheet would hand the cell
+    straight back unless the removal can be recognised and re-applied.
+    """
+    where, key = ("row_idx", row_idx) if row_idx is not None else ("row_no", row_no)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO overrides VALUES (?,?,?,?,?,?)",
+            (run_id, row_no, slot, old_value, None,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        conn.execute(
+            "UPDATE cells SET link=NULL, value=NULL, reach=NULL, engagement=NULL, "
+            "provenance='missing', confidence=0.0, note=?, removed_link=? "
+            f"WHERE run_id=? AND {where}=? AND slot=?",
+            (LINK_REMOVED_NOTE, url, run_id, key, slot),
         )
 
 
@@ -227,6 +321,17 @@ def set_output(run_id: int, output_file: str, db_path: str | Path | None = None)
     with _connect(db_path) as conn:
         conn.execute("UPDATE runs SET output_file=?, status='generated' WHERE id=?",
                      (output_file, run_id))
+
+
+def discard_run(run_id: int, db_path: str | Path | None = None) -> None:
+    """Mark a run the user threw out of the cycle — the wrong sheet, usually.
+
+    The row and its cells stay: this table is the audit log, and "a run was
+    started and abandoned" is part of the history. Only the status changes, so
+    the activity feed stops presenting it as work in hand.
+    """
+    with _connect(db_path) as conn:
+        conn.execute("UPDATE runs SET status='discarded' WHERE id=?", (run_id,))
 
 
 def list_runs(db_path: str | Path | None = None) -> list[dict]:

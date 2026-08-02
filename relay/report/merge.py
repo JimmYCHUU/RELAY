@@ -38,11 +38,21 @@ def merge_runs(results: list[RunResult], label: str | None = None) -> RunResult:
     rows = [replace(row, source_sheet=res.month if stamp else row.source_sheet)
             for res in results for row in res.rows]
 
+    # A per-cell note carries the position of the row it is about, and the merged
+    # table renumbers every row after the first tab's. Shifting each note by its
+    # tab's offset keeps it pointing at its own cell rather than at whatever row
+    # now sits at that index.
+    issues, offset = [], 0
+    for res in results:
+        issues += [i if i.row_idx is None else replace(i, row_idx=i.row_idx + offset)
+                   for i in res.issues]
+        offset += len(res.rows)
+
     merged = RunResult(
         brand=first.brand,
         month=label or first.month,
         rows=rows,
-        issues=[i for res in results for i in res.issues],
+        issues=issues,
         # The tabs of one workbook are one campaign wearing one brand colour;
         # where a later tab was left unbranded, the first one that carries a
         # colour speaks for the file.

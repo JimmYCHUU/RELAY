@@ -12,12 +12,39 @@ Provenance = Literal["collected", "manual", "missing"]
 # Report value slots, in template column order.
 SLOTS = ("fb1", "fb2", "fb3", "x", "ig")
 
+# What a cell says once its link has been struck off by hand. The post is gone
+# from the platform — deleted by whoever ran the page — but the campaign sheet
+# still lists it, so nothing can ever fill this cell and it should stop being
+# counted as work outstanding.
+LINK_REMOVED_NOTE = ("link removed by hand — the post is no longer on the "
+                     "platform, so this slot is left blank in the report")
+
 
 @dataclass
 class RowIssue:
     file: str
     row: int
     reason: str
+    # The cell this note is about, when it is about one. `slot` names it and
+    # `row_idx` is the row's position in the run — together they are what lets
+    # the dashboard drop a note once that cell has been filled. A note kept past
+    # its own cell reads as a live problem and is simply no longer true: a cell
+    # is tried by the export's caption join, then the sibling recovery, then a
+    # post visit, and each pass that gives up has its own reason.
+    slot: str = ""
+    row_idx: Optional[int] = None
+    # How to read `row`. An ingest note points at a line of the workbook; a
+    # per-cell note points at the No the review table shows. The two are rarely
+    # the same number, and one list showing both as "row N" invites the reader
+    # to look in the wrong place.
+    where: str = ""
+
+    def __post_init__(self) -> None:
+        # row 0 is the "no particular row" marker a whole-file note carries —
+        # rendering it as "row 0" sends the reader looking for a line that does
+        # not exist, so it stays unlocated.
+        if not self.where and self.row:
+            self.where = f"row {self.row}"
 
 
 @dataclass

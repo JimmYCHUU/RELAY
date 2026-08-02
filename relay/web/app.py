@@ -69,13 +69,40 @@ def _insights_summary(result: RunResult) -> dict | None:
     }
 
 
+def _live_issues(result: RunResult) -> list:
+    """The run's notes that still describe something true.
+
+    A per-cell note says why one pass gave up on one cell. Three passes try each
+    Facebook cell in turn, and a later one filling the cell does not retract the
+    earlier one's note — so the panel accumulated explanations for cells that
+    had long since been resolved. Measured against a real July cycle, the panel
+    carried 29 per-cell notes about 27 cells, and 26 of those 27 already held a
+    figure.
+
+    So a note is shown only while its own cell is still empty and still linked.
+    Notes that are not about a particular cell (a blank Date, a page no export
+    covers) are about the input files and always stand.
+    """
+    out = []
+    # Snapshot: a collector thread rewrites this list as it works.
+    for issue in list(result.issues):
+        if issue.slot and issue.row_idx is not None \
+                and 0 <= issue.row_idx < len(result.rows):
+            row = result.rows[issue.row_idx]
+            cell = row.cells.get(issue.slot)
+            if not row.links.get(issue.slot) or (cell and cell.value is not None):
+                continue
+        out.append(issue)
+    return out
+
+
 def _serialize(run_id: str, result: RunResult) -> dict:
     return {
         "run_id": run_id,
         "brand": result.brand,
         "month": result.month,
         "coverage": result.coverage(),
-        "issues": [vars(i) for i in result.issues],
+        "issues": [vars(i) for i in _live_issues(result)],
         "insights": _insights_summary(result),
         "rows": [
             {
@@ -90,6 +117,11 @@ def _serialize(run_id: str, result: RunResult) -> dict:
                         "provenance": c.provenance,
                         "confidence": c.confidence,
                         "note": c.note,
+                        # Carried to the dashboard so the manual editor can show
+                        # what a cell already holds instead of blanking the two
+                        # figures the export supplied alongside the view count.
+                        "reach": c.reach,
+                        "engagement": c.engagement,
                     }
                     for s, c in r.cells.items()
                 },
@@ -147,10 +179,15 @@ def run(req: RunReq) -> dict:
     # Resume: inherit values a previous run of the same campaign/sheet/brand
     # already collected (checkpointed per cell), so a crash, power-off, or
     # dashboard restart never re-scrapes what's done.
-    restored = 0
+    restored = struck = 0
     prev_id = store.find_resumable_run(inputs)
     if prev_id:
         restored = store.hydrate_cells(result, store.load_cells(prev_id))
+        # …and re-strike the links a person already removed by hand. The sheet
+        # still lists those posts — nobody went back and deleted the link, which
+        # is exactly why the button exists — so without this they come back as
+        # outstanding work on every re-run.
+        struck = store.apply_removed_links(result, store.load_removed_links(prev_id))
     run_id = uuid.uuid4().hex[:12]
     _runs[run_id] = result
     _run_inputs[run_id] = inputs
@@ -158,6 +195,7 @@ def run(req: RunReq) -> dict:
     _evict_runs()
     out = _serialize(run_id, result)
     out["restored"] = restored
+    out["links_removed"] = struck
     return out
 
 
@@ -174,26 +212,120 @@ class CellReq(BaseModel):
 
 
 class OverrideReq(CellReq):
-    value: int | None
+    value: int | None = None
+    # Meta publishes all three figures per Facebook post and the report has a
+    # column for each, so a hand-entered cell can carry all three too — a post
+    # read off Business Suite by eye has its reach and engagement right there.
+    reach: int | None = None
+    engagement: int | None = None
 
 
-def _find_row(result: RunResult, row_no: int):
-    for r in result.rows:
+# Which slots the report actually has Reach and Engagement columns for. X's
+# public page and the Instagram export offer no equivalent, so those slots keep
+# their single column — accepting the figures there would store numbers that no
+# delivered workbook could ever print.
+_COMPANION_SLOTS = ("fb1", "fb2", "fb3")
+
+
+def _find_row(result: RunResult, row_no: int) -> tuple[int, object]:
+    """The row bearing this No, and its position in the run.
+
+    The position is what every write should key on: a campaign sheet's No is
+    hand-filled and may repeat, so a write keyed on the number alone lands in
+    every row that shares it.
+    """
+    for idx, r in enumerate(result.rows):
         if r.no == row_no:
-            return r
+            return idx, r
     raise HTTPException(404, f"row {row_no} not found")
+
+
+def _cell_payload(cell) -> dict:
+    return {"value": cell.value, "provenance": cell.provenance,
+            "confidence": cell.confidence, "note": cell.note,
+            "reach": cell.reach, "engagement": cell.engagement}
 
 
 @app.post("/api/override")
 def override(req: OverrideReq) -> dict:
-    result = _get_run(req.run_id)
-    row = _find_row(result, req.row_no)
-    old = row.cells[req.slot].value
     from ..models import CellValue
-    row.cells[req.slot] = CellValue(req.value, "manual", 1.0, "manual entry")
-    store.record_override(_run_db_ids[req.run_id], req.row_no, req.slot, old, req.value)
-    return {"value": req.value, "provenance": "manual", "confidence": 1.0,
-            "note": "manual entry"}
+
+    result = _get_run(req.run_id)
+    row_idx, row = _find_row(result, req.row_no)
+    if req.slot not in _COMPANION_SLOTS \
+            and (req.reach is not None or req.engagement is not None):
+        raise HTTPException(
+            400, f"{req.slot.upper()} has no reach or engagement column in the "
+                 "report — only the Facebook slots carry those")
+    old = row.cells[req.slot].value
+    parts = ["typed in by hand"]
+    if req.reach is not None:
+        parts.append(f"reach {req.reach:,}")
+    if req.engagement is not None:
+        parts.append(f"engagement {req.engagement:,}")
+    cell = CellValue(req.value, "manual", 1.0, " · ".join(parts),
+                     reach=req.reach, engagement=req.engagement)
+    row.cells[req.slot] = cell
+    store.record_override(_run_db_ids[req.run_id], req.row_no, req.slot, old,
+                          req.value, cell=cell, row_idx=row_idx)
+    return _cell_payload(cell)
+
+
+@app.post("/api/link/remove")
+def remove_link(req: CellReq) -> dict:
+    """Strike a dead link off the sheet for this run.
+
+    A post gets taken down and nobody removes the link from the campaign sheet,
+    so the cell sits there as permanently outstanding work that no collector can
+    ever finish. Removing the link says so: the slot stops counting toward
+    coverage, stops being flagged for review, and the delivered workbook leaves
+    that link and its three figures blank rather than pointing the sponsor at a
+    page that 404s.
+    """
+    from ..models import LINK_REMOVED_NOTE, CellValue
+
+    result = _get_run(req.run_id)
+    row_idx, row = _find_row(result, req.row_no)
+    url = row.links.get(req.slot)
+    if not url:
+        raise HTTPException(409, "this slot has no link to remove")
+    old = row.cells[req.slot].value
+    row.links[req.slot] = None
+    row.cells[req.slot] = CellValue.missing(LINK_REMOVED_NOTE)
+    store.record_link_removal(_run_db_ids[req.run_id], req.row_no, req.slot, url,
+                              old_value=old, row_idx=row_idx)
+    return {"removed": url, "cell": _cell_payload(row.cells[req.slot]),
+            "coverage": result.coverage()}
+
+
+@app.delete("/api/run/{run_id}")
+def discard(run_id: str) -> dict:
+    """Drop one campaign tab out of the cycle.
+
+    The wrong sheet is usually only recognisable once its rows are on screen —
+    at which point the whole cycle had to be re-run to be rid of it. This takes
+    the run out of the session; the audit row stays, marked discarded, because
+    "this was started and abandoned" is part of the history.
+
+    Refused while anything is collecting. A running collector holds its own
+    reference to the run's rows and would keep writing into a campaign the user
+    believes is gone, so the honest answer is to name what to stop first.
+    """
+    _get_run(run_id)                      # 404 for an id this session never had
+    busy = ("autopilot" if _autopilot_running() else
+            "a collection" if any(p.state == "running" for p in
+                                  list(_batch_jobs.values()) + list(_jobs.values()))
+            else "")
+    if busy:
+        raise HTTPException(409, f"{busy} is running — stop it first, then remove "
+                                 "this campaign")
+    db_id = _run_db_ids.get(run_id)
+    _runs.pop(run_id, None)
+    _run_db_ids.pop(run_id, None)
+    _run_inputs.pop(run_id, None)
+    if db_id is not None:
+        store.discard_run(db_id)
+    return {"discarded": run_id, "remaining": len(_runs)}
 
 
 class BatchCollectReq(BaseModel):

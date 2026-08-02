@@ -311,9 +311,15 @@ function showError(msg) {
   el._dismissTimer = setTimeout(() => conceal(el), 8000);
 }
 async function errText(res) {
+  // A dashboard reloaded against a RELAY that has not been restarted yet finds
+  // the newer endpoints missing, and "Not Found" tells nobody anything.
+  if (res.status === 404 || res.status === 405) return RESTART_HINT;
   try { const j = await res.json(); return j.detail || res.statusText; }
   catch { return res.statusText; }
 }
+const RESTART_HINT =
+  "This RELAY server is still running the previous version — close it and start it "
+  + "again (Start RELAY.bat) to enable this. Nothing already collected is lost.";
 
 /* ═════════ dashboard ═════════ */
 function slotSums() {
@@ -618,20 +624,88 @@ function runTabLabel(run) {
   return repeated ? `${run.brand} · ${run.month}` : run.brand;
 }
 
+/* The ✕ lives beside the tab, not inside it: a button inside a button is
+   invalid, and the browser stops delivering clicks to the inner one. */
 function renderBrandTabs(sel, onSwitch) {
   const el = $(sel);
   el.innerHTML = state.runs.map((r, i) => `
-    <button class="ctab${r === state.run ? " active" : ""}" role="tab"
-      aria-selected="${r === state.run}" data-run="${i}">
-      ${esc(runTabLabel(r))} <span class="count">${r.rows.filter(needsAttention).length || ""}</span>
-    </button>`).join("");
+    <span class="ctab-wrap${r === state.run ? " active" : ""}">
+      <button class="ctab${r === state.run ? " active" : ""}" role="tab"
+        aria-selected="${r === state.run}" data-run="${i}">
+        ${esc(runTabLabel(r))} <span class="count">${r.rows.filter(needsAttention).length || ""}</span>
+      </button>
+      <button class="ctab-x" data-drop="${i}" title="Remove ${esc(runTabLabel(r))} from this cycle"
+        aria-label="Remove ${esc(runTabLabel(r))} from this cycle">
+        <svg class="ic-svg"><use href="#i-close"/></svg></button>
+    </span>`).join("");
   el.onclick = (e) => {
+    const x = e.target.closest(".ctab-x");
+    if (x) { discardRun(state.runs[+x.dataset.drop]); return; }
     const b = e.target.closest(".ctab");
     if (!b || state.runs[+b.dataset.run] === state.run) return;
     state.run = state.runs[+b.dataset.run];
     state.selectedRow = null;
     onSwitch();
   };
+}
+
+/* ═════════ discarding a campaign mid-review ═════════ */
+/* The wrong campaign sheet is usually only recognisable once its rows are on
+   screen, which used to mean re-running the whole cycle to be rid of it. */
+async function discardRun(run) {
+  if (!run) return;
+  const label = runTabLabel(run);
+  const ok = await askConfirm({
+    title: `Remove ${label}?`,
+    body: `${run.rows.length} matched rows leave this cycle and ${label} drops out of `
+        + `the reports. The campaign sheet itself is untouched — load it again any time, `
+        + `and everything already collected for it comes back.`,
+    ok: "Remove campaign",
+  });
+  if (!ok) return;
+
+  const res = await fetch(`/api/run/${encodeURIComponent(run.run_id)}`, { method: "DELETE" });
+  if (!res.ok) { showError(await errText(res)); return; }
+
+  state.runs = state.runs.filter((r) => r !== run);
+  // A group is one delivered workbook; it survives losing one of its tabs and
+  // disappears only when it has no tabs left.
+  state.groups = state.groups
+    .map((g) => ({ ...g, run_ids: g.run_ids.filter((id) => id !== run.run_id) }))
+    .filter((g) => g.run_ids.length);
+  if (state.run === run) state.run = state.runs[0] || null;
+  state.selectedRow = null;
+  state.dashSel = "all";
+
+  if (!state.runs.length) {
+    $("#exportBtn").disabled = true;
+    $("#rangeText").textContent = "No month loaded";
+    $("#syncTitle").textContent = "No run yet";
+    $("#syncSub").textContent = "Upload this month's files";
+    $$(".nav-item[data-view='review'], .nav-item[data-view='report']")
+      .forEach((b) => b.setAttribute("data-locked", ""));
+    showView("inputs");
+    return;
+  }
+  $("#rangeText").textContent = cycleLabel();
+  $("#syncTitle").textContent = cycleLabel();
+  $("#syncSub").textContent =
+    `${state.runs.reduce((a, r) => a + r.rows.length, 0)} content rows loaded`;
+  renderReview();
+  if (!$("#view-report").hidden) renderReport();
+}
+
+/* ═════════ confirm ═════════ */
+const confirmDialog = $("#confirmDialog");
+function askConfirm({ title, body, ok = "Confirm" }) {
+  $("#confirmTitle").textContent = title;
+  $("#confirmBody").textContent = body;
+  $("#confirmOk").textContent = ok;
+  confirmDialog.showModal();
+  return new Promise((resolve) => {
+    confirmDialog.addEventListener(
+      "close", () => resolve(confirmDialog.returnValue === "ok"), { once: true });
+  });
 }
 
 function renderReview() {
@@ -648,12 +722,25 @@ function renderReview() {
   $("#coverageTiles").innerHTML = tiles.join("");
   renderReviewBody();
 
-  const issues = $("#issues");
-  if (r.issues.length) {
-    issues.hidden = false;
-    issues.innerHTML = `<strong>Input notes</strong><ul>` +
-      r.issues.map((i) => `<li>${esc(i.file)} · row ${i.row}: ${esc(i.reason)}</li>`).join("") + `</ul>`;
-  } else issues.hidden = true;
+  renderIssues(r.issues);
+}
+
+/* Input notes. The list is scrolled rather than allowed to run the page off the
+   bottom — a two-hundred-row sheet with blank dates puts a hundred lines here,
+   and the Continue button ended up below all of them.
+   `where` comes from the backend because "row 5" means two different things:
+   a line of the workbook for an ingest note, the No the table shows for a
+   per-cell one. */
+function renderIssues(issues) {
+  const el = $("#issues");
+  if (!issues.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML =
+    `<div class="issues-head"><strong>Input notes</strong>
+       <span class="issues-count">${issues.length}</span></div>
+     <ul class="issues-list">` +
+    issues.map((i) => `<li>${esc(i.file)}${i.where ? ` · ${esc(i.where)}` : ""}: `
+      + `${esc(i.reason)}</li>`).join("") + `</ul>`;
 }
 
 function tile(label, value, extra, warn = false) {
@@ -703,6 +790,11 @@ function provTip(c) {
 
 /* ═════════ cell editor ═════════ */
 const dialog = $("#cellDialog");
+/* Only Facebook: Meta publishes reach and engagement per post and the report
+   has a column for each. X's public page and the Instagram export offer
+   neither, so those slots would be collecting numbers nothing can print. */
+const HAS_COMPANIONS = (slot) => slot.startsWith("fb");
+
 function openCellEditor(rowNo, slot) {
   state.editing = { rowNo, slot };
   const row = state.run.rows.find((r) => r.no === rowNo);
@@ -717,8 +809,41 @@ function openCellEditor(rowNo, slot) {
   link.hidden = !row.links[slot];
   if (row.links[slot]) link.href = row.links[slot];
   $("#manualValue").value = c.value ?? "";
+  const pair = $("#fbMetrics");
+  pair.hidden = !HAS_COMPANIONS(slot);
+  $("#manualReach").value = pair.hidden ? "" : (c.reach ?? "");
+  $("#manualEngagement").value = pair.hidden ? "" : (c.engagement ?? "");
+  // Nothing to strike off a slot the sheet never linked.
+  $("#deadLinkRow").hidden = !row.links[slot];
   dialog.showModal();
 }
+
+/* A post the team took down, whose link nobody removed from the sheet. */
+$("#removeLinkBtn").addEventListener("click", async () => {
+  if (!state.editing) return;
+  const { rowNo, slot } = state.editing;
+  const ok = await askConfirm({
+    title: `Remove the ${SLOT_LABELS[slot]} link on row ${rowNo}?`,
+    body: "Use this when the post itself is gone from the platform. The slot stops "
+        + "counting as a missing value, and the delivered workbook leaves its link and "
+        + "figures blank instead of pointing the sponsor at a dead page.",
+    ok: "Remove link",
+  });
+  if (!ok) return;
+  const res = await fetch("/api/link/remove", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_id: state.run.run_id, row_no: rowNo, slot }),
+  });
+  if (!res.ok) { showError(await errText(res)); return; }
+  const data = await res.json();
+  const row = state.run.rows.find((r) => r.no === rowNo);
+  row.links[slot] = null;
+  row.cells[slot] = data.cell;
+  state.editing = null;          // the close handler must not then write a value
+  dialog.close("cancel");
+  recomputeCoverage();
+  renderReview();
+});
 document.addEventListener("click", (e) => {
   const btn = e.target.closest(".cell-edit");
   if (!btn) return;
@@ -744,11 +869,19 @@ dialog.addEventListener("close", async () => {
   const wantNext = dialog.returnValue === "apply-next";
   if ((dialog.returnValue !== "apply" && !wantNext) || !state.editing) return;
   const { rowNo, slot } = state.editing;
-  const value = $("#manualValue").value === "" ? null : parseInt($("#manualValue").value, 10);
-  const body = { run_id: state.run.run_id, row_no: rowNo, slot, value };
+  const num = (sel) => $(sel).value === "" ? null : parseInt($(sel).value, 10);
+  const body = { run_id: state.run.run_id, row_no: rowNo, slot,
+                 value: num("#manualValue") };
+  if (HAS_COMPANIONS(slot)) {
+    body.reach = num("#manualReach");
+    body.engagement = num("#manualEngagement");
+  }
   const res = await fetch("/api/override", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) { showError(await errText(res)); return; }
   const cell = await res.json();
+  // An older server accepts the request and drops the two extra figures without
+  // saying so, which is the one way this can fail silently.
+  if (body.reach != null && cell.reach == null) showError(RESTART_HINT);
   const row = state.run.rows.find((r) => r.no === rowNo);
   row.cells[slot] = cell;
   recomputeCoverage();

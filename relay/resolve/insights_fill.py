@@ -334,9 +334,20 @@ def fill_from_insights(
                         continue
                     guess = _match_by_caption(groups, row.caption, url, row.date, slug)
                     if guess is AMBIGUOUS:
+                        # Said on the cell too, not only in the run's notes.
+                        # `note_unaccounted` rewrites any cell still carrying its
+                        # "awaiting the …" placeholder, and its generic wording —
+                        # "its caption matches nothing on this page" — is the
+                        # opposite of what happened here: the caption matched two
+                        # posts equally well.
+                        row.cells[slot].note = (
+                            "this page ran the same story twice and the caption cannot "
+                            "say which of the two the link points at — Resolve Facebook "
+                            "posts settles it by the post's own id")
                         row_issue(run, row, [slot],
                                   "this page ran the same story twice and the caption "
-                                  "cannot say which post the link points at")
+                                  "cannot say which post the link points at",
+                                  row_idx)
                         continue
                     if guess:
                         found, score = guess
@@ -377,8 +388,12 @@ def _fill_pageless(run: RunResult, row, row_idx: int, slots: list[str], groups,
     hits = _candidates([e for entries in groups.values() for e in entries],
                        row.caption, row.date)
     if not hits:
+        for slot in slots:
+            row.cells[slot].note = ("this link names no page, and no row in the exports "
+                                    "matches this caption — Resolve Facebook posts will "
+                                    "follow the link and identify the post")
         row_issue(run, row, slots,
-                  "link names no page and no export row matches this caption")
+                  "link names no page and no export row matches this caption", row_idx)
         return 0
 
     taken = {_slug_for(row.links.get(s), index) for s in FB_SLOTS} - {None}
@@ -387,8 +402,12 @@ def _fill_pageless(run: RunResult, row, row_idx: int, slots: list[str], groups,
     for slot in slots:
         slug = inferred.get(slot)
         if not slug:
+            row.cells[slot].note = ("this link names no page, and several Somoy pages ran "
+                                    "the story — the sheet gives no reason to prefer one, "
+                                    "so nothing is guessed here")
             row_issue(run, row, [slot],
-                      "link names no page and the sheet gives no clear page for this slot")
+                      "link names no page and the sheet gives no clear page for this slot",
+                      row_idx)
             continue
         found, score = next((r, s) for s, r in hits if page_slug(r.permalink) == slug)
         kind = "share" if is_share_link(row.links[slot]) else "photo"
@@ -411,11 +430,30 @@ def _fill_pageless(run: RunResult, row, row_idx: int, slots: list[str], groups,
     return filled
 
 
-def row_issue(run: RunResult, row, slots: list[str], reason: str) -> None:
-    """Record why a cell stayed empty, so the dashboard can say so."""
-    run.issues.append(RowIssue(
-        f"{run.brand} {run.month}", row.no,
-        f"{'/'.join(s.upper() for s in slots)}: {reason}"))
+def row_issue(run: RunResult, row, slots: list[str], reason: str,
+              row_idx: int | None = None) -> None:
+    """Record why a cell stayed empty, so the dashboard can say so.
+
+    One note per slot, and a slot's newest note replaces its older one. Three
+    passes try each Facebook cell in turn — the export's caption join, the
+    sibling recovery from a post the browser identified, then a visit to the
+    post itself — and each one that gives up has a different reason. Appending
+    them all left the panel showing a cell three contradictory explanations, of
+    which only the last still described the situation.
+
+    The note is tied to its cell (`slot`, `row_idx`) rather than only described
+    in words, because that is what lets the dashboard drop it entirely once a
+    later pass fills the cell. Measured on a real July cycle, 26 of the 27 cells
+    the panel was complaining about had since been filled by the Facebook pass.
+    """
+    if row_idx is None:
+        row_idx = next((i for i, r in enumerate(run.rows) if r is row), None)
+    for slot in slots:
+        run.issues[:] = [i for i in run.issues
+                         if (i.row_idx, i.slot) != (row_idx, slot)]
+        run.issues.append(RowIssue(
+            f"{run.brand} {run.month}", row.no, f"{slot.upper()}: {reason}",
+            slot=slot, row_idx=row_idx))
 
 
 def fill_instagram_from_insights(result: RunResult | list[RunResult],
@@ -623,12 +661,12 @@ def fill_row_from_anchor(run: RunResult, row, row_idx: int, anchor_slot: str,
         if not hits:
             row_issue(run, row, [slot],
                       f"no post on this page matches the {anchor_slot.upper()} post "
-                      "read from Facebook")
+                      "read from Facebook", row_idx)
             continue
         if len(hits) > 1 and hits[0][0] - hits[1][0] < config.REPAIR_SIBLING_MARGIN:
             row_issue(run, row, [slot],
                       "two posts on this page carry the same story — the link "
-                      "does not say which one it is")
+                      "does not say which one it is", row_idx)
             continue
         score, found = hits[0]
         apart = int(abs((found.published - anchor.published).total_seconds()) // 60)
