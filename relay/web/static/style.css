@@ -297,10 +297,35 @@ input:disabled, select:disabled {
 .tab .count { background: var(--surface); }
 .ctab .count:empty, .tab .count:empty { display: none; }
 .tab.active .count { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
-/* many brands → the tab row scrolls, it never wraps */
-.tabbar { overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+/* many brands → the tab row scrolls, it never wraps.
+   The native scrollbar stays hidden on purpose: it would sit along the bottom
+   of the strip, between the active tab and the panel it is supposed to flow
+   into, and break the join above. The affordance is the pair of edge chevrons
+   below, which overlay the strip and cost it no height. */
+.tabbar { overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; scroll-behavior: smooth; }
 .tabbar::-webkit-scrollbar { display: none; }
 .ctab { white-space: nowrap; flex-shrink: 0; }
+/* A tab scrolled hard against either end had its ✕ clipped by the edge. */
+.tabbar { padding-right: 28px; }
+.tabbar::after { content: ""; flex: 0 0 4px; }
+
+.tabstrip { position: relative; }
+.tabstrip-nav {
+  position: absolute; top: 0; bottom: 1px; width: 46px; padding: 0;
+  display: none; place-items: center; z-index: 3; border: 0; border-radius: 0;
+  color: var(--ink-2); cursor: pointer;
+}
+.tabstrip-nav .ic-svg { width: 17px; height: 17px; }
+.tabstrip-nav:hover { color: var(--ink); }
+.tabstrip-nav.prev { left: 0; justify-content: start;
+  background: linear-gradient(to right, var(--panel) 45%, transparent); }
+.tabstrip-nav.next { right: 0; justify-content: end;
+  background: linear-gradient(to left, var(--panel) 45%, transparent); }
+/* Shown only on the side that has more tabs to reach, so the row says which
+   way it runs rather than merely ending mid-word. */
+.tabstrip.can-prev .tabstrip-nav.prev,
+.tabstrip.can-next .tabstrip-nav.next { display: grid; }
+@media (prefers-reduced-motion: reduce) { .tabbar { scroll-behavior: auto; } }
 .ctab.active {
   background: var(--surface); border-color: var(--grid); color: var(--ink);
   margin-bottom: -1px;
@@ -331,10 +356,14 @@ input:disabled, select:disabled {
   position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
   width: 21px; height: 21px; padding: 0; display: grid; place-items: center;
   border: 0; background: transparent; color: var(--ink-2); border-radius: 7px;
-  opacity: 0; z-index: 1;
+  opacity: .5; z-index: 1;
   transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
 }
 .ctab-x .ic-svg { width: 13px; height: 13px; }
+/* Visible on every tab, not only the one you are on. Hiding it until hover
+   meant looking straight at the campaign you wanted rid of and seeing nothing
+   there — the one tab whose ✕ was always shown was the one you had no reason
+   to remove. */
 .ctab-wrap:hover .ctab-x,
 .ctab-wrap.active .ctab-x,
 .ctab-x:focus-visible { opacity: 1; }

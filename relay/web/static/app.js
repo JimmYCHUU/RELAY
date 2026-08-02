@@ -647,7 +647,52 @@ function renderBrandTabs(sel, onSwitch) {
     state.selectedRow = null;
     onSwitch();
   };
+  revealActiveTab(el);
+  updateTabStrip(el);
 }
+
+/* ═════════ the tab strip when there are more brands than fit ═════════ */
+/* Eight brands already overflow, and the row simply ended mid-word with the
+   last tab's ✕ cut off — the strip scrolled, but nothing said so, because the
+   native scrollbar is hidden (it would sit between the active tab and the panel
+   it flows into). These three keep the row honest instead. */
+function updateTabStrip(bar) {
+  const strip = bar.closest(".tabstrip");
+  if (!strip) return;
+  const slack = bar.scrollWidth - bar.clientWidth;
+  strip.classList.toggle("can-prev", slack > 1 && bar.scrollLeft > 1);
+  strip.classList.toggle("can-next", slack > 1 && bar.scrollLeft < slack - 1);
+}
+
+/* Scroll the smallest amount that brings the whole active tab into view —
+   never `scrollIntoView`, which would drag the page vertically too. */
+function revealActiveTab(bar) {
+  const tab = bar.querySelector(".ctab-wrap.active");
+  if (!tab) return;
+  const pad = 48;                     // clear of the chevron overlays
+  const left = tab.offsetLeft, right = left + tab.offsetWidth;
+  if (left - pad < bar.scrollLeft) bar.scrollLeft = Math.max(0, left - pad);
+  else if (right + pad > bar.scrollLeft + bar.clientWidth)
+    bar.scrollLeft = right + pad - bar.clientWidth;
+}
+
+$$(".tabstrip").forEach((strip) => {
+  const bar = $(".tabbar", strip);
+  bar.addEventListener("scroll", () => updateTabStrip(bar), { passive: true });
+  strip.addEventListener("click", (e) => {
+    const nav = e.target.closest(".tabstrip-nav");
+    if (nav) bar.scrollLeft += +nav.dataset.scroll * (bar.clientWidth * 0.7);
+  });
+  // A plain wheel over the strip should move it sideways: most mice have no
+  // horizontal axis, and this row only ever scrolls one way.
+  bar.addEventListener("wheel", (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    if (bar.scrollWidth <= bar.clientWidth) return;
+    e.preventDefault();
+    bar.scrollLeft += e.deltaY;
+  }, { passive: false });
+});
+addEventListener("resize", () => $$(".tabbar").forEach(updateTabStrip));
 
 /* ═════════ discarding a campaign mid-review ═════════ */
 /* The wrong campaign sheet is usually only recognisable once its rows are on

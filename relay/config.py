@@ -124,6 +124,11 @@ CHALLENGE_MARKERS = ("checkpoint", "captcha", "login_attempt", "suspicious")
 # its renderer heap until the machine swaps. The login lives in the on-disk
 # profile, so recycling never costs the session.
 CONTEXT_RECYCLE_EVERY = 25
+# The same guard for the logged-out X session. It has by far the most visits to
+# make in a cycle — 427 against Facebook's 150 in a real July — and used to hold
+# one page open for all of them. Higher than the Meta figure because a public
+# status page is a fraction of the weight of an MBS one.
+X_CONTEXT_RECYCLE_EVERY = int(os.environ.get("RELAY_X_RECYCLE_EVERY", 40))
 # Skip images/video/fonts on the Meta session — every extraction path is
 # text/HTML-based, so nothing breaks; big memory + load-time win on long
 # batches. Set False if MBS pages ever misbehave.
