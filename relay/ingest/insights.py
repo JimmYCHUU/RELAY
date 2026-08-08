@@ -267,6 +267,34 @@ class InsightsIndex:
         return len(self.rows)
 
 
+def _build_engagement(rcs: int | None, all_in: int | None, reactions: int | None,
+                      comments: int | None, shares: int | None,
+                      clicks: int | None) -> int | None:
+    """The report's Engagement figure: every interaction the post drew.
+
+    Clicks belong in it, and Meta's "Reactions, comments and shares" column
+    demonstrably does not contain them — measured on this repo's own exports, it
+    equalled reactions + comments + shares on all 7,243 rows that carried the
+    four figures. So clicks are added to it, every time.
+
+    An export that instead publishes the ads-side "Post engagement" is already
+    counting clicks inside that number (`all_in`), and it is taken as it stands.
+
+    Failing both, the parts are added up. The three interaction parts are still
+    required — a partial sum is a smaller number wearing the same label — but
+    clicks are not, because plenty of exports simply have no click column and
+    refusing those rows would blank a figure they used to carry.
+    """
+    if all_in is not None:
+        return all_in
+    if rcs is None:
+        parts = (reactions, comments, shares)
+        if any(p is None for p in parts):
+            return None
+        rcs = sum(parts)
+    return rcs + (clicks or 0)
+
+
 def _build_row(values: list[object], cols: dict[str, int], fname: str,
                rownum: int) -> InsightsRow | None:
     def cell(name: str) -> object:
@@ -279,14 +307,10 @@ def _build_row(values: list[object], cols: dict[str, int], fname: str,
     reactions = _to_int(cell("reactions"))
     comments = _to_int(cell("comments"))
     shares = _to_int(cell("shares"))
-    engagement = _to_int(cell("engagement"))
-    if engagement is None:
-        # Meta's own combined column is the figure of record; this only stands in
-        # for an export that lacks it. Requires all three parts — a partial sum
-        # would be a smaller number wearing the same label.
-        parts = (reactions, comments, shares)
-        if all(p is not None for p in parts):
-            engagement = sum(parts)
+    clicks = _to_int(cell("clicks"))
+    engagement = _build_engagement(_to_int(cell("engagement")),
+                                   _to_int(cell("engagement_all")),
+                                   reactions, comments, shares, clicks)
     return InsightsRow(
         post_id=str(cell("post_id") or "").strip(),
         permalink=permalink,
@@ -300,6 +324,7 @@ def _build_row(values: list[object], cols: dict[str, int], fname: str,
         engagement=engagement,
         comments=comments,
         shares=shares,
+        clicks=clicks,
         post_type=str(cell("post_type") or "").strip(),
         is_share=str(cell("is_share") or "").strip().lower() in _TRUTHY,
         source_file=fname,

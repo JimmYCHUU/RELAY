@@ -118,10 +118,11 @@ def _serialize(run_id: str, result: RunResult) -> dict:
                         "confidence": c.confidence,
                         "note": c.note,
                         # Carried to the dashboard so the manual editor can show
-                        # what a cell already holds instead of blanking the two
+                        # what a cell already holds instead of blanking the
                         # figures the export supplied alongside the view count.
                         "reach": c.reach,
                         "engagement": c.engagement,
+                        "clicks": c.clicks,
                     }
                     for s, c in r.cells.items()
                 },
@@ -213,18 +214,21 @@ class CellReq(BaseModel):
 
 class OverrideReq(CellReq):
     value: int | None = None
-    # Meta publishes all three figures per Facebook post and the report has a
-    # column for each, so a hand-entered cell can carry all three too — a post
-    # read off Business Suite by eye has its reach and engagement right there.
+    # Meta publishes all four figures per Facebook post and the report has a
+    # column for each, so a hand-entered cell can carry all four too — a post
+    # read off Business Suite by eye has them all right there.
     reach: int | None = None
     engagement: int | None = None
+    clicks: int | None = None
 
 
-# Which slots the report actually has Reach and Engagement columns for. X's
-# public page and the Instagram export offer no equivalent, so those slots keep
-# their single column — accepting the figures there would store numbers that no
-# delivered workbook could ever print.
+# Which slots the report actually has Reach / Engagement / Clicks columns for.
+# X's public page and the Instagram export offer no equivalent, so those slots
+# keep their single column — accepting the figures there would store numbers
+# that no delivered workbook could ever print.
 _COMPANION_SLOTS = ("fb1", "fb2", "fb3")
+# The companion fields themselves, in the order the editor shows them.
+_COMPANIONS = ("reach", "engagement", "clicks")
 
 
 def _find_row(result: RunResult, row_no: int) -> tuple[int, object]:
@@ -243,7 +247,7 @@ def _find_row(result: RunResult, row_no: int) -> tuple[int, object]:
 def _cell_payload(cell) -> dict:
     return {"value": cell.value, "provenance": cell.provenance,
             "confidence": cell.confidence, "note": cell.note,
-            "reach": cell.reach, "engagement": cell.engagement}
+            **{n: getattr(cell, n) for n in _COMPANIONS}}
 
 
 @app.post("/api/override")
@@ -252,19 +256,15 @@ def override(req: OverrideReq) -> dict:
 
     result = _get_run(req.run_id)
     row_idx, row = _find_row(result, req.row_no)
-    if req.slot not in _COMPANION_SLOTS \
-            and (req.reach is not None or req.engagement is not None):
+    given = {n: getattr(req, n) for n in _COMPANIONS}
+    if req.slot not in _COMPANION_SLOTS and any(v is not None for v in given.values()):
         raise HTTPException(
-            400, f"{req.slot.upper()} has no reach or engagement column in the "
-                 "report — only the Facebook slots carry those")
+            400, f"{req.slot.upper()} has no reach, engagement or clicks column "
+                 "in the report — only the Facebook slots carry those")
     old = row.cells[req.slot].value
     parts = ["typed in by hand"]
-    if req.reach is not None:
-        parts.append(f"reach {req.reach:,}")
-    if req.engagement is not None:
-        parts.append(f"engagement {req.engagement:,}")
-    cell = CellValue(req.value, "manual", 1.0, " · ".join(parts),
-                     reach=req.reach, engagement=req.engagement)
+    parts += [f"{n} {v:,}" for n, v in given.items() if v is not None]
+    cell = CellValue(req.value, "manual", 1.0, " · ".join(parts), **given)
     row.cells[req.slot] = cell
     store.record_override(_run_db_ids[req.run_id], req.row_no, req.slot, old,
                           req.value, cell=cell, row_idx=row_idx)
@@ -279,8 +279,8 @@ def remove_link(req: CellReq) -> dict:
     so the cell sits there as permanently outstanding work that no collector can
     ever finish. Removing the link says so: the slot stops counting toward
     coverage, stops being flagged for review, and the delivered workbook leaves
-    that link and its three figures blank rather than pointing the sponsor at a
-    page that 404s.
+    that link and its figures blank rather than pointing the sponsor at a page
+    that 404s.
     """
     from ..models import LINK_REMOVED_NOTE, CellValue
 

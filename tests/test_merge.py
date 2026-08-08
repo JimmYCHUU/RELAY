@@ -26,7 +26,8 @@ def _run(brand: str, month: str, n: int, start: int = 1, accent=None) -> RunResu
             no=i, date=datetime(2026, 6, 1 + (i % 20)), caption=f"{month} row {i}",
             links={"fb1": f"{FB}{i}", "fb2": None, "fb3": None, "x": None, "ig": None},
             cells={"fb1": CellValue(100 * i, "collected", 1.0, "export",
-                                    reach=60 * i, engagement=3 * i),
+                                    reach=60 * i, engagement=3 * i,
+                                    clicks=12 * i),
                    **{s: CellValue.missing() for s in ("fb2", "fb3", "x", "ig")}},
         ))
     return RunResult(brand=brand, month=month, rows=rows, accent=accent)
@@ -78,18 +79,19 @@ def test_the_merged_workbook_renumbers_end_to_end_and_names_each_tab(tmp_path):
 
     wb = openpyxl.load_workbook(out)
     ws = wb["June"]
-    assert ws.max_column == 20                      # 19 + the Source tab column
-    assert ws.cell(row=2, column=20).value == "Source tab"
+    assert ws.max_column == 23                      # 22 + the Source tab column
+    assert ws.cell(row=2, column=23).value == "Source tab"
     assert [ws.cell(row=3 + i, column=1).value for i in range(5)] == [1, 2, 3, 4, 5]
-    assert [ws.cell(row=3 + i, column=20).value for i in range(5)] == \
+    assert [ws.cell(row=3 + i, column=23).value for i in range(5)] == \
         ["June"] * 3 + ["June ratio 2"] * 2
     # one set of totals, over all five rows
     sum_row = 3 + 5
     assert ws.cell(row=sum_row, column=1).value == "Sum"
     assert ws.cell(row=sum_row, column=5).value == "=SUM(E3:E7)"
-    assert ws.cell(row=sum_row + 4, column=4).value == f"=D{sum_row + 1}/5"
+    # the first average sits below all four totals and divides the first of them
+    assert ws.cell(row=sum_row + 5, column=4).value == f"=D{sum_row + 1}/5"
     # the banner spans the wider sheet
-    assert "A1:T1" in {str(r) for r in ws.merged_cells.ranges}
+    assert "A1:W1" in {str(r) for r in ws.merged_cells.ranges}
     wb.close()
 
 
@@ -97,10 +99,10 @@ def test_facebook_figures_land_in_their_own_columns(tmp_path):
     out = build_report(_run("Ruchi", "June", 1), tmp_path / "one.xlsx")
     wb = openpyxl.load_workbook(out)
     ws = wb["June"]
-    # row 1 of the fixture: views 100, reach 60, engagement 3
-    assert [ws.cell(row=3, column=c).value for c in (5, 6, 7)] == [100, 60, 3]
+    # row 1 of the fixture: views 100, reach 60, engagement 3, clicks 12
+    assert [ws.cell(row=3, column=c).value for c in (5, 6, 7, 8)] == [100, 60, 3, 12]
     # an unlinked slot leaves all of its columns empty
-    assert [ws.cell(row=3, column=c).value for c in (9, 10, 11)] == [None] * 3
+    assert [ws.cell(row=3, column=c).value for c in (10, 11, 12, 13)] == [None] * 4
     wb.close()
 
 

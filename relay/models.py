@@ -80,11 +80,15 @@ class InsightsRow:
     views: Optional[int] = None
     reach: Optional[int] = None
     reactions: Optional[int] = None
-    # Meta's combined "Reactions, comments and shares". Reconstructed from the
-    # three parts only when the export omits the combined column.
+    # Meta's combined "Reactions, comments and shares" plus `clicks`, since that
+    # column counts none of them (see config.INSIGHTS_HEADERS). Reconstructed
+    # from the parts only when the export omits the combined column.
     engagement: Optional[int] = None
     comments: Optional[int] = None
     shares: Optional[int] = None
+    # The export's all-clicks figure ("Total clicks"), carried in its own right
+    # as well as folded into `engagement`.
+    clicks: Optional[int] = None
     post_type: str = ""
     is_share: bool = False
     source_file: str = ""
@@ -102,14 +106,14 @@ class CellValue:
     confidence: float = 1.0
     note: str = ""
     # Companion figures for the same post, carried alongside the headline value
-    # so the report can print Views / Reach / Engagement side by side. Only ever
-    # set from a Meta export (`resolve.insights_fill`) — a collector reads a
-    # post's view count off the page and has no reach or engagement to offer, and
-    # a manual override is a single typed number. So these stay None for every
-    # cell that did not come from the export, and the report leaves them blank
-    # rather than inventing a figure.
+    # so the report can print Views / Reach / Engagement / Clicks side by side.
+    # Only ever set from a Meta export (`resolve.insights_fill`) or typed in by
+    # hand — a collector reads a post's view count off the page and has none of
+    # the three to offer. So these stay None for every cell that came from a
+    # collector, and the report leaves them blank rather than inventing a figure.
     reach: Optional[int] = None
     engagement: Optional[int] = None
+    clicks: Optional[int] = None
 
     @classmethod
     def missing(cls, note: str = "") -> "CellValue":

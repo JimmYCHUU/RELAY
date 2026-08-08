@@ -43,46 +43,71 @@ LINK_BLUE = "FF1155CC"
 
 COL_WIDTHS = {
     "A": 16.7, "B": 21.7, "C": 31.3,
-    "D": 30.0, "E": 15.0, "F": 15.0, "G": 17.0,      # FB link 1 + its three figures
-    "H": 30.0, "I": 15.0, "J": 15.0, "K": 17.0,      # FB link 2
-    "L": 30.0, "M": 15.0, "N": 15.0, "O": 17.0,      # FB link 3
-    "P": 27.7, "Q": 24.6,                            # X
-    "R": 25.0, "S": 19.6,                            # Instagram
-    "T": 20.0,                                       # Source tab (merged reports)
+    "D": 30.0, "E": 15.0, "F": 15.0, "G": 17.0, "H": 15.0,   # FB link 1 + its figures
+    "I": 30.0, "J": 15.0, "K": 15.0, "L": 17.0, "M": 15.0,   # FB link 2
+    "N": 30.0, "O": 15.0, "P": 15.0, "Q": 17.0, "R": 15.0,   # FB link 3
+    "S": 27.7, "T": 24.6,                            # X
+    "U": 25.0, "V": 19.6,                            # Instagram
+    "W": 20.0,                                       # Source tab (merged reports)
 }
 HEADERS = [
     "No", "Date", "Content's name",
-    "Content's Link 1", "Views", "Reach", "Engagement",
-    "Content's Link 2", "Views", "Reach", "Engagement",
-    "Content's Link 3", "Views", "Reach", "Engagement",
+    "Content's Link 1", "Views", "Reach", "Engagement", "Clicks",
+    "Content's Link 2", "Views", "Reach", "Engagement", "Clicks",
+    "Content's Link 3", "Views", "Reach", "Engagement", "Clicks",
     "X, Link 4", "Impressions",
     "Instagram", "Views",
 ]
 # The link cell for each slot, in template column order.
-LINK_COLS = {"fb1": 4, "fb2": 8, "fb3": 12, "x": 16, "ig": 18}
+LINK_COLS = {"fb1": 4, "fb2": 9, "fb3": 14, "x": 19, "ig": 21}
 # The three Facebook column groups, left to right.
 FB_COLUMNS = ("fb1", "fb2", "fb3")
-# Figure columns per slot. Only Facebook carries all three: Meta's content export
-# publishes Reach and "Reactions, comments and shares" per post, and neither X's
-# public page nor the Instagram export offers an equivalent — so those slots keep
-# their single column rather than showing two permanently empty ones.
+# Figure columns per slot. Only Facebook carries all four: Meta's content export
+# publishes Reach, "Reactions, comments and shares" and Total clicks per post,
+# and neither X's public page nor the Instagram export offers an equivalent — so
+# those slots keep their single column rather than showing three permanently
+# empty ones.
 METRIC_COLS = {
-    "fb1": {"views": 5, "reach": 6, "engagement": 7},
-    "fb2": {"views": 9, "reach": 10, "engagement": 11},
-    "fb3": {"views": 13, "reach": 14, "engagement": 15},
-    "x": {"views": 17},
-    "ig": {"views": 19},
+    "fb1": {"views": 5, "reach": 6, "engagement": 7, "clicks": 8},
+    "fb2": {"views": 10, "reach": 11, "engagement": 12, "clicks": 13},
+    "fb3": {"views": 15, "reach": 16, "engagement": 17, "clicks": 18},
+    "x": {"views": 20},
+    "ig": {"views": 22},
 }
-LAST_COL = 19
+LAST_COL = 22
 # Appended only when a report merges several tabs of one workbook — it says which
 # tab a row came from, the one thing the merge would otherwise lose.
-SOURCE_COL = 20
+SOURCE_COL = 23
 SOURCE_HEADER = "Source tab"
 
-VIEW_COLS = tuple(m["views"] for m in METRIC_COLS.values())
-REACH_COLS = tuple(m["reach"] for m in METRIC_COLS.values() if "reach" in m)
-ENGAGEMENT_COLS = tuple(m["engagement"] for m in METRIC_COLS.values() if "engagement" in m)
-NUMERIC_COLS = tuple(sorted(VIEW_COLS + REACH_COLS + ENGAGEMENT_COLS))
+
+def _metric_cols(name: str) -> tuple[int, ...]:
+    return tuple(m[name] for m in METRIC_COLS.values() if name in m)
+
+
+VIEW_COLS = _metric_cols("views")
+REACH_COLS = _metric_cols("reach")
+ENGAGEMENT_COLS = _metric_cols("engagement")
+CLICK_COLS = _metric_cols("clicks")
+NUMERIC_COLS = tuple(sorted(VIEW_COLS + REACH_COLS + ENGAGEMENT_COLS + CLICK_COLS))
+
+# The footer, in order: every figure's grand total, then every figure's average
+# per content. Views lead both blocks — that is the headline the sponsor reads
+# first — and the totals stay together rather than alternating with the
+# averages, so a reader comparing two figures compares like with like.
+#
+# The averages divide by the row count, the same denominator "Average views per
+# content" has always used. A row whose Facebook post was never made still
+# counts, because the average answers "what did a piece of content earn", and
+# leaving those rows out would quietly answer a different question for reach,
+# engagement and clicks than for views.
+FOOTER_METRICS = (
+    ("Total views", "Average views per content", VIEW_COLS),
+    ("Total reach (Facebook)", "Average reach per content (Facebook)", REACH_COLS),
+    ("Total engagement (Facebook)",
+     "Average engagement per content (Facebook)", ENGAGEMENT_COLS),
+    ("Total clicks (Facebook)", "Average clicks per content (Facebook)", CLICK_COLS),
+)
 # Where a footer row's label stops and its merged value begins.
 LABEL_SPAN = 3
 VALUE_COL = LABEL_SPAN + 1
@@ -140,8 +165,8 @@ def _fb_order(row) -> list[str]:
 
 
 def _col_sum(cols, row: int) -> str:
-    """A total across non-adjacent columns — Views, Reach and Engagement
-    interleave per slot, so no single range can add up one metric."""
+    """A total across non-adjacent columns — the four figures interleave per
+    slot, so no single range can add up one metric."""
     return "=" + "+".join(f"{get_column_letter(c)}{row}" for c in cols)
 
 
@@ -245,7 +270,7 @@ def build_report(
         _write_cell(ws, excel_row, 3, r.caption, f_caption, fill=band,
                     border=border, align=left)
         # Each Facebook column shows whichever slot `_fb_order` puts there, and
-        # that slot's three figures travel with its link. X and Instagram have a
+        # that slot's four figures travel with its link. X and Instagram have a
         # column each and never move.
         shown = list(zip(FB_COLUMNS, _fb_order(r))) + [("x", "x"), ("ig", "ig")]
         for col_slot, slot in shown:
@@ -258,9 +283,9 @@ def build_report(
             if link:
                 link_cell.hyperlink = link
             for metric, vc in METRIC_COLS[col_slot].items():
-                # Reach and engagement exist only for a cell the export filled;
-                # a collected or hand-typed figure leaves them blank rather than
-                # implying a zero the post did not report.
+                # Reach, engagement and clicks exist only for a cell the export
+                # filled or a person typed; a collected figure leaves them blank
+                # rather than implying a zero the post did not report.
                 _write_cell(ws, excel_row, vc, getattr(cell, metric, None)
                             if metric != "views" else cell.value,
                             f_data, fmt=NUM_FMT, fill=band, border=border)
@@ -271,13 +296,10 @@ def build_report(
     n = len(result.rows)
     last_data = first_data + n - 1
     sum_row = last_data + 1
-    total_row = sum_row + 1          # Total views — the headline, kept first
-    reach_row = sum_row + 2
-    eng_row = sum_row + 3
-    avg_row = sum_row + 4
+    first_total = sum_row + 1        # Total views — the headline, kept first
+    first_avg = first_total + len(FOOTER_METRICS)
 
-    # footer: Sum — one per figure column, including the new Reach and
-    # Engagement ones, so each column totals itself.
+    # footer: Sum — one per figure column, so each column totals itself.
     ws.merge_cells(start_row=sum_row, start_column=1,
                    end_row=sum_row, end_column=LABEL_SPAN)
     for col in range(1, last_col + 1):
@@ -289,16 +311,17 @@ def build_report(
                     f"=SUM({cl}{first_data}:{cl}{last_data})" if n else 0,
                     f_sum, fmt=NUM_FMT, fill=fill_tint, border=border)
 
-    # footer: the three grand totals, then the average
+    # footer: the four grand totals, then the same four as an average per content
     value_letter = get_column_letter(VALUE_COL)
     totals = [
-        (total_row, "Total views", _col_sum(VIEW_COLS, sum_row), NUM_FMT),
-        (reach_row, "Total reach (Facebook)", _col_sum(REACH_COLS, sum_row), NUM_FMT),
-        (eng_row, "Total engagement (Facebook)",
-         _col_sum(ENGAGEMENT_COLS, sum_row), NUM_FMT),
-        # n == 0 would make this =D../0 — a #DIV/0! in the sponsor's copy.
-        (avg_row, "Average views per content",
-         f"={value_letter}{total_row}/{n}" if n else 0, "0"),
+        (first_total + i, label, _col_sum(cols, sum_row), NUM_FMT)
+        for i, (label, _, cols) in enumerate(FOOTER_METRICS)
+    ] + [
+        # Each average divides its own total, one row apiece above. n == 0 would
+        # make this =D../0 — a #DIV/0! in the sponsor's copy.
+        (first_avg + i, label,
+         f"={value_letter}{first_total + i}/{n}" if n else 0, "0")
+        for i, (_, label, _cols) in enumerate(FOOTER_METRICS)
     ]
     for rr, label, formula, fmt in totals:
         ws.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=LABEL_SPAN)

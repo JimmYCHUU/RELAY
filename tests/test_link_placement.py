@@ -12,7 +12,8 @@ import pytest
 
 from relay.ingest.campaign import parse_campaign
 from relay.models import SLOTS, CellValue, ReportRow, RunResult
-from relay.report.generator import _fb_order, build_report
+from relay.report.generator import (LINK_COLS, METRIC_COLS, _fb_order,
+                                    build_report)
 
 FB = "https://www.facebook.com/somoynews.tv/posts/pfbid0{}AbCdEf"
 FB2 = "https://www.facebook.com/somoytvsports/posts/pfbid0{}GhIjKl"
@@ -155,20 +156,28 @@ def _built(tmp_path, links, cells):
     build_report(RunResult(brand="Brand", month="July", rows=rows), out)
     wb = openpyxl.load_workbook(out)
     ws = wb["July"]
-    got = {c: ws.cell(3, i).value for c, i in
-           (("L1", 4), ("V1", 5), ("R1", 6), ("E1", 7),
-            ("L2", 8), ("V2", 9), ("L3", 12), ("V3", 13),
-            ("X", 16), ("XV", 17), ("IG", 18), ("IGV", 19))}
+    # Read off the generator's own layout rather than repeating it here: the
+    # column a figure lands in has moved twice now, and each time this helper
+    # was the last thing to notice.
+    at = {"L1": LINK_COLS["fb1"], "L2": LINK_COLS["fb2"], "L3": LINK_COLS["fb3"],
+          "X": LINK_COLS["x"], "IG": LINK_COLS["ig"],
+          "V1": METRIC_COLS["fb1"]["views"], "R1": METRIC_COLS["fb1"]["reach"],
+          "E1": METRIC_COLS["fb1"]["engagement"], "C1": METRIC_COLS["fb1"]["clicks"],
+          "V2": METRIC_COLS["fb2"]["views"], "V3": METRIC_COLS["fb3"]["views"],
+          "XV": METRIC_COLS["x"]["views"], "IGV": METRIC_COLS["ig"]["views"]}
+    got = {name: ws.cell(3, i).value for name, i in at.items()}
     wb.close()
     return got
 
 
-def test_the_promoted_link_takes_its_three_figures_with_it(tmp_path):
+def test_the_promoted_link_takes_its_figures_with_it(tmp_path):
     cells = {s: CellValue.missing() for s in SLOTS}
-    cells["fb2"] = CellValue(70512, "collected", 1.0, "export", reach=60000, engagement=1200)
+    cells["fb2"] = CellValue(70512, "collected", 1.0, "export", reach=60000,
+                             engagement=1200, clicks=340)
     cells["x"] = CellValue(900, "collected", 1.0, "x")
     got = _built(tmp_path, [None, FB.format(2), None], cells)
-    assert (got["L1"], got["V1"], got["R1"], got["E1"]) == (FB.format(2), 70512, 60000, 1200)
+    assert (got["L1"], got["V1"], got["R1"], got["E1"], got["C1"]) == \
+        (FB.format(2), 70512, 60000, 1200, 340)
     assert (got["L2"], got["V2"]) == (None, None), "and vacates the column it came from"
     assert (got["X"], got["XV"]) == (X.format(1), 900), "X never moves"
     assert got["IG"] == IG.format("a"), "nor Instagram"

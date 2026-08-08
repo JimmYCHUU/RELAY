@@ -772,52 +772,95 @@ def test_a_page_no_export_covers_is_named_outright(tmp_path):
     assert "none of the supplied exports cover somoytechnews" in run.rows[0].cells["fb2"].note
 
 
-# --- reach and engagement, the report's other two Facebook figures ---
+# --- reach, engagement and clicks, the report's other three Facebook figures ---
 #
-# The report prints Views, Reach and Engagement per Facebook link. All three have
-# to come off the *same* export row, and Engagement has to be Meta's own combined
-# "Reactions, comments and shares" rather than a number RELAY adds up — a sponsor
-# checks it against Business Suite, where that column is what they see.
+# The report prints Views, Reach, Engagement and Clicks per Facebook link. All
+# four have to come off the *same* export row. Engagement means every
+# interaction the post drew, which is Meta's own "Reactions, comments and
+# shares" column *plus* its clicks: that column counts none of them, verified
+# against the real exports, where it equalled reactions + comments + shares on
+# all 7,243 rows carrying the four figures.
+
+_CLICK_HEADER = ('"Post ID","Page ID","Page name",Title,"Publish time",Permalink,'
+                 '"Is share","Post type",Views,Reach,'
+                 '"Reactions, comments and shares",Reactions,Comments,Shares,'
+                 '"Total clicks","Link clicks","Other clicks"\n')
+
 
 def test_engagement_reads_metas_combined_column_not_the_parts(tmp_path):
-    """ROWS' first post has RCS 7 beside Reactions 5 and Comments 2. The
-    combined column is the figure of record; 5 + 2 only happens to agree here,
-    and would not once Shares is non-zero."""
+    """ROWS' first post has RCS 7 beside Reactions 5 and Comments 2, and no
+    click column at all. The combined column is the figure of record; 5 + 2 only
+    happens to agree here, and would not once Shares is non-zero."""
     index = build_index([_csv(tmp_path, ROWS)])
     row = index.lookup(f"{PAGE}pfbid0AAA")
     assert (row.views, row.reach) == (564, 393)
     assert row.engagement == 7
     assert (row.reactions, row.comments) == (5, 2)
+    assert row.clicks is None
+
+
+def test_clicks_read_the_total_column_and_join_the_engagement_figure(tmp_path):
+    """"Reactions, comments and shares" excludes clicks, so the report's
+    Engagement adds them: 7 + 220. Clicks itself is the export's own combined
+    "Total clicks" — never Link clicks, and never the parts added up."""
+    rows = (f'4001,900,"p","cap","07/03/2026 10:00",{PAGE}pfbid0CLICKS,'
+            '0,Photos,564,393,7,5,2,0,220,9,211\n')
+    index = build_index([_csv(tmp_path, rows, header=_CLICK_HEADER)])
+    row = index.lookup(f"{PAGE}pfbid0CLICKS")
+    assert row.clicks == 220
+    assert row.engagement == 227
+
+
+def test_the_ads_side_engagement_column_already_counts_its_clicks(tmp_path):
+    """"Post engagement" is the ads-side metric and every click is already
+    inside it. Adding clicks again would count them twice."""
+    header = ('"Post ID","Page ID","Page name",Title,"Publish time",Permalink,'
+              '"Is share","Post type",Views,Reach,"Post engagement",'
+              'Reactions,Comments,Shares,"Total clicks"\n')
+    rows = (f'4101,900,"p","cap","07/03/2026 10:00",{PAGE}pfbid0ADS,'
+            '0,Photos,564,393,900,5,2,0,220\n')
+    index = build_index([_csv(tmp_path, rows, header=header)])
+    row = index.lookup(f"{PAGE}pfbid0ADS")
+    assert (row.clicks, row.engagement) == (220, 900)
 
 
 def test_engagement_is_reconstructed_only_when_the_column_is_absent(tmp_path):
     header = ('"Post ID","Page ID","Page name",Title,"Publish time",Permalink,'
-              '"Is share","Post type",Views,Reach,Reactions,Comments,Shares\n')
+              '"Is share","Post type",Views,Reach,Reactions,Comments,Shares,'
+              '"Total clicks"\n')
     rows = (f'3001,900,"p","cap","07/03/2026 10:00",{PAGE}pfbid0NOCOMBINED,'
-            '0,Photos,500,300,40,7,3\n'
-            # one part missing: a partial sum would be a smaller number wearing
-            # the same label, so no engagement is claimed at all
+            '0,Photos,500,300,40,7,3,11\n'
+            # one interaction part missing: a partial sum would be a smaller
+            # number wearing the same label, so no engagement is claimed at all
             f'3002,900,"p","cap2","07/03/2026 10:00",{PAGE}pfbid0PARTIAL,'
-            '0,Photos,500,300,40,,\n')
+            '0,Photos,500,300,40,,,11\n'
+            # …but a missing *click* column is ordinary — plenty of exports have
+            # none, and refusing those rows would blank a figure they carried
+            f'3003,900,"p","cap3","07/03/2026 10:00",{PAGE}pfbid0NOCLICKS,'
+            '0,Photos,500,300,40,7,3,\n')
     index = build_index([_csv(tmp_path, rows, header=header)])
-    assert index.lookup(f"{PAGE}pfbid0NOCOMBINED").engagement == 50
+    assert index.lookup(f"{PAGE}pfbid0NOCOMBINED").engagement == 61
     assert index.lookup(f"{PAGE}pfbid0PARTIAL").engagement is None
+    assert index.lookup(f"{PAGE}pfbid0NOCLICKS").engagement == 50
 
 
-def test_a_filled_cell_carries_reach_and_engagement_from_its_own_row(tmp_path):
-    index = build_index([_csv(tmp_path, ROWS)])
+def test_a_filled_cell_carries_reach_engagement_and_clicks_from_its_own_row(tmp_path):
+    rows = (f'4201,900,"p","cap","07/04/2026 11:30",{PAGE}pfbid0BBB,'
+            '0,Photos,4000,2800,120,100,15,5,340,40,300\n')
+    index = build_index([_csv(tmp_path, rows, header=_CLICK_HEADER)])
     cell = cell_from_insights(index.lookup(f"{PAGE}pfbid0BBB"), "views")
-    assert (cell.value, cell.reach, cell.engagement) == (4000, 2800, 120)
+    assert (cell.value, cell.reach, cell.engagement, cell.clicks) == \
+        (4000, 2800, 460, 340)
 
 
-def test_a_cell_no_export_filled_offers_no_reach_or_engagement():
-    """A collector reads a view count off the post page and a manual entry is a
-    single typed number — neither has reach or engagement, and the report must
-    leave those blank rather than print a zero the post never reported."""
+def test_a_cell_no_export_filled_offers_none_of_the_three():
+    """A collector reads a view count off the post page and nothing else, so the
+    report must leave the other three blank rather than print a zero the post
+    never reported. A manual entry may carry them, but only if typed."""
     blank = CellValue.missing("awaiting the insights export")
-    assert blank.reach is None and blank.engagement is None
+    assert (blank.reach, blank.engagement, blank.clicks) == (None, None, None)
     typed = CellValue(1234, "manual", 1.0, "manual entry")
-    assert typed.reach is None and typed.engagement is None
+    assert (typed.reach, typed.engagement, typed.clicks) == (None, None, None)
 
 
 def test_reactions_column_is_still_not_mistaken_for_the_combined_one():
@@ -828,3 +871,15 @@ def test_reactions_column_is_still_not_mistaken_for_the_combined_one():
     assert cols["engagement"] == 2
     assert cols["reactions"] == 3
     assert cols["comments"] == 4 and cols["shares"] == 5
+
+
+def test_clicks_takes_the_total_column_and_never_a_narrower_one():
+    """Meta ships four click columns side by side. "Total clicks" is the one the
+    report means; "Link clicks" counts only outbound taps."""
+    cols = resolve_headers(["Permalink", "Views", "Total clicks", "Link clicks",
+                            "Other clicks",
+                            "Matched audience targeting consumption (Photo Click)"])
+    assert cols["clicks"] == 2
+    # …and with no total column, nothing is claimed rather than the wrong thing
+    narrow = resolve_headers(["Permalink", "Views", "Link clicks", "Other clicks"])
+    assert "clicks" not in narrow
