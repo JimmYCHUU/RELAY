@@ -304,20 +304,31 @@ them without a sponsor ever seeing another sponsor's numbers.
 ### What the report carries
 
 Per row: `No · Date · Content's name`, then each of the three Facebook links with
-its own **Views · Reach · Engagement**, then the X link with Impressions and the
-Instagram link with Views.
+its own **Views · Reach · Engagement · Clicks**, then the X link with Impressions
+and the Instagram link with Views.
 
-Reach and Engagement are Meta's own columns from the Business Suite export —
-Engagement is the export's *"Reactions, comments and shares"* figure, not a number
-RELAY adds up, so it matches what you see in Business Suite. They are Facebook-only:
-neither X's public page nor the Instagram export publishes an equivalent, and a
-cell RELAY filled from a collector visit or a typed override has no reach or
-engagement to report, so those stay blank rather than showing a zero the post
-never reported.
+Reach and Clicks are Meta's own columns from the Business Suite export — Clicks is
+the export's *"Total clicks"*, the combined figure that already contains link,
+photo and other clicks, so RELAY never adds those up itself.
 
-The footer carries **Sum** per column, then **Total views**, **Total reach
-(Facebook)**, **Total engagement (Facebook)** and **Average views per content** —
-all live Excel formulas.
+**Engagement is every interaction the post drew: reactions, comments, shares and
+clicks.** Meta's *"Reactions, comments and shares"* column counts none of the
+clicks — measured across this repo's own exports, it equalled reactions +
+comments + shares on all 7,243 rows carrying the four figures — so RELAY adds the
+click figure to it. That makes the report's Engagement deliberately *larger* than
+the number on the Business Suite screen, by exactly that post's clicks. An export
+that instead publishes the ads-side *"Post engagement"* is already counting clicks
+inside it, and that figure is taken as it stands.
+
+All three are Facebook-only: neither X's public page nor the Instagram export
+publishes an equivalent, and a cell RELAY filled from a collector visit has none
+of them to report, so those stay blank rather than showing a zero the post never
+reported. A hand-typed cell can carry all four — the editor has a box for each.
+
+The footer carries **Sum** per column, then the four grand totals — **Total
+views**, **Total reach (Facebook)**, **Total engagement (Facebook)**, **Total
+clicks (Facebook)** — and then the same four again as an **average per content**,
+each dividing its own total by the row count. All live Excel formulas.
 
 ## CLI
 

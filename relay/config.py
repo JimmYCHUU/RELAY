@@ -43,21 +43,35 @@ INSIGHTS_HEADERS = {
     # "likes" last: on a Facebook export "Likes and reactions" must still win, and
     # exact matches are claimed before any substring pass (see resolve_headers).
     "reactions":  ("reactions", "post reactions", "likes and reactions", "likes"),
-    # Engagement is Meta's own combined column, not a figure RELAY adds up — the
-    # export already publishes reactions + comments + shares as one number and
-    # that is the one a sponsor can check against Business Suite. `comments` and
-    # `shares` are carried only so the combined figure can still be reconstructed
-    # from an export that omits it (older files, some IG exports).
+    # Meta publishes two different combined figures under names that read alike,
+    # and they differ by exactly the thing the report now needs to add:
     #
-    # These three sit after "reactions" deliberately. The exact pass claims a
-    # column before any substring pass sees it, so "Reactions, comments and
-    # shares" is taken by `engagement` and "Reactions" by `reactions`, whichever
-    # order they appear in the file.
+    #   `engagement`     "Reactions, comments and shares" — reactions + comments
+    #                    + shares and nothing else. Verified against this repo's
+    #                    own exports: it equalled the three parts on 7,243 of
+    #                    7,243 rows carrying all four figures, with no exception.
+    #                    Clicks are NOT in it, so `_build_row` adds them.
+    #   `engagement_all` "Post engagement" / "Total engagement" — the ads-side
+    #                    metric, which already counts every click alongside the
+    #                    reactions, comments and shares. Adding clicks to this
+    #                    one would count them twice, so `_build_row` does not.
+    #
+    # The two were one key until clicks joined the figure, which is precisely
+    # when the difference started to matter.
     "engagement": ("reactions, comments and shares", "reactions, comments, and shares",
-                   "likes, comments and shares", "engagement", "post engagement",
-                   "total engagement", "interactions"),
+                   "likes, comments and shares"),
+    "engagement_all": ("post engagement", "total engagement", "engagement",
+                       "interactions"),
     "comments":   ("comments", "post comments"),
     "shares":     ("shares", "post shares", "reshares"),
+    # The all-clicks figure, and only that one. The real export carries "Total
+    # clicks" beside "Link clicks", "Other clicks" and a photo-click column, and
+    # the total is their sum — 95 of 95 rows where all four were present. So this
+    # reads the one combined column and never adds the parts up itself. A bare
+    # "clicks" alias is deliberately absent: on an export without a total column
+    # the substring pass would grab "Link clicks" and label outbound taps as
+    # every click on the post.
+    "clicks":     ("total clicks", "post clicks", "total post clicks", "clicks (all)"),
     "post_type":  ("post type", "type", "media type"),
     "is_share":   ("is share", "shared post"),
 }

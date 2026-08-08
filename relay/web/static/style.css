@@ -883,13 +883,17 @@ dialog label { margin: 12px 0; }
 dialog input[type="range"] { min-width: 0; accent-color: var(--accent); }
 dialog menu { display: flex; justify-content: flex-end; gap: 10px; padding: 0; margin: 16px 0 0; }
 dialog .tabs { margin: 12px 0 4px; }
-/* Reach and engagement sit side by side under Views — they are the same post's
-   figures, read off the same screen, not a second task. */
-/* minmax(0,…) and min-width:0 — a bare 1fr floors at the input's intrinsic
-   width (~20 characters), which two abreast overflow the dialog. */
-.metric-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.metric-pair label { margin: 0; min-width: 0; }
-.metric-pair input { min-width: 0; }
+/* Reach, engagement and clicks sit in a row under Views — they are the same
+   post's figures, read off the same screen, not three separate tasks. */
+/* auto-fit + minmax(0,…) + min-width:0 — a bare 1fr floors at the input's
+   intrinsic width (~20 characters), which three abreast overflow the dialog;
+   the 104px floor drops them to two rows on a narrow phone rather than
+   squeezing three unreadable boxes across it. */
+.metric-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 12px;
+}
+.metric-grid label { margin: 0; min-width: 0; }
+.metric-grid input { min-width: 0; }
 .metric-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
 .dead-link {
   display: flex; flex-direction: column; gap: 6px; align-items: flex-start;

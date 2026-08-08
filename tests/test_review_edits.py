@@ -139,45 +139,48 @@ def run(client, tmp_path):
     return res.json()
 
 
-def test_manual_entry_carries_reach_and_engagement(client, run):
-    """Meta publishes all three figures per Facebook post and the report has a
-    column for each, so a hand-typed cell can carry all three too."""
+def test_manual_entry_carries_reach_engagement_and_clicks(client, run):
+    """Meta publishes all four figures per Facebook post and the report has a
+    column for each, so a hand-typed cell can carry all four too."""
     res = client.post("/api/override", json={
         "run_id": run["run_id"], "row_no": 1, "slot": "fb1",
-        "value": 147461, "reach": 120300, "engagement": 4820})
+        "value": 147461, "reach": 120300, "engagement": 4820, "clicks": 1310})
     assert res.status_code == 200, res.text
     cell = res.json()
-    assert (cell["value"], cell["reach"], cell["engagement"]) == (147461, 120300, 4820)
+    assert (cell["value"], cell["reach"], cell["engagement"], cell["clicks"]) == \
+        (147461, 120300, 4820, 1310)
     assert cell["provenance"] == "manual"
     assert "reach 120,300" in cell["note"] and "engagement 4,820" in cell["note"]
+    assert "clicks 1,310" in cell["note"]
 
 
 def test_hand_typed_figures_reach_the_delivered_workbook(client, run, tmp_path):
-    """The Reach and Engagement columns are the point of typing them in."""
+    """The Reach, Engagement and Clicks columns are the point of typing them in."""
     client.post("/api/override", json={
         "run_id": run["run_id"], "row_no": 1, "slot": "fb1",
-        "value": 147461, "reach": 120300, "engagement": 4820})
+        "value": 147461, "reach": 120300, "engagement": 4820, "clicks": 1310})
     assert client.post(f"/api/report/{run['run_id']}").status_code == 200
     dl = client.get(f"/api/report/{run['run_id']}/download")
     out = tmp_path / "report.xlsx"
     out.write_bytes(dl.content)
     wb = openpyxl.load_workbook(out)
     ws = wb["July"]
-    # row 3 is the first data row; E/F/G are FB 1's Views / Reach / Engagement
-    assert (ws["E3"].value, ws["F3"].value, ws["G3"].value) == (147461, 120300, 4820)
+    # row 3 is the first data row; E–H are FB 1's Views / Reach / Engagement / Clicks
+    assert [ws[c + "3"].value for c in "EFGH"] == [147461, 120300, 4820, 1310]
     wb.close()
 
 
 def test_manual_entry_survives_a_re_run(client, run, tmp_path):
-    """The three figures are checkpointed together — a resume that brought back
-    only the view count silently emptied the report's other two columns."""
+    """The four figures are checkpointed together — a resume that brought back
+    only the view count silently emptied the report's other three columns."""
     client.post("/api/override", json={
         "run_id": run["run_id"], "row_no": 2, "slot": "fb1",
-        "value": 5000, "reach": 4000, "engagement": 300})
+        "value": 5000, "reach": 4000, "engagement": 300, "clicks": 90})
     again = client.post("/api/run", json={"campaign": str(tmp_path / "campaign.xlsx"),
                                           "sheet": "July", "brand": "Brand C"}).json()
     cell = again["rows"][1]["cells"]["fb1"]
-    assert (cell["value"], cell["reach"], cell["engagement"]) == (5000, 4000, 300)
+    assert (cell["value"], cell["reach"], cell["engagement"], cell["clicks"]) == \
+        (5000, 4000, 300, 90)
 
 
 def test_reach_is_refused_where_the_report_has_no_column_for_it(client, run):
@@ -185,7 +188,15 @@ def test_reach_is_refused_where_the_report_has_no_column_for_it(client, run):
         "run_id": run["run_id"], "row_no": 1, "slot": "x",
         "value": 900, "reach": 800})
     assert res.status_code == 400
-    assert "no reach or engagement column" in res.json()["detail"]
+    assert "no reach, engagement or clicks column" in res.json()["detail"]
+
+
+def test_clicks_are_refused_where_the_report_has_no_column_for_them(client, run):
+    res = client.post("/api/override", json={
+        "run_id": run["run_id"], "row_no": 1, "slot": "ig",
+        "value": 900, "clicks": 40})
+    assert res.status_code == 400
+    assert "no reach, engagement or clicks column" in res.json()["detail"]
 
 
 def test_a_dead_link_can_be_struck_off_the_sheet(client, run, tmp_path):

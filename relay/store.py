@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS cells (
     row_idx INTEGER,
     reach INTEGER,
     engagement INTEGER,
-    removed_link TEXT
+    removed_link TEXT,
+    clicks INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_cells_key ON cells (run_id, row_no, slot);
 """
@@ -46,7 +47,14 @@ _CELLS_ADDED = (
     # from the platform. Kept rather than merely blanked so the removal can be
     # re-applied to a fresh run of the same sheet — which still lists the link.
     ("removed_link", "TEXT"),
+    ("clicks", "INTEGER"),
 )
+
+# The companion figures, in one place: every statement below writes or reads all
+# of them, and a column added to `cells` but forgotten in one of those five
+# statements is exactly how a figure survives a collection and then vanishes on
+# resume. Order is the order the SQL and its parameters both use.
+_COMPANIONS = ("reach", "engagement", "clicks")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -129,12 +137,14 @@ def save_run(result: RunResult, inputs: dict, db_path: str | Path | None = None)
              json.dumps(inputs), _summarize(result)),
         )
         run_id = cur.lastrowid
+        cols = f"{_CELLS_COLUMNS}, row_idx, " + ", ".join(_COMPANIONS)
         conn.executemany(
-            f"INSERT INTO cells ({_CELLS_COLUMNS}, row_idx, reach, engagement) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO cells ({cols}) "
+            f"VALUES ({','.join('?' * (cols.count(',') + 1))})",
             [
                 (run_id, r.no, slot, r.links.get(slot), c.value, c.provenance,
-                 c.confidence, c.note, idx, c.reach, c.engagement)
+                 c.confidence, c.note, idx,
+                 *(getattr(c, name) for name in _COMPANIONS))
                 for idx, r in enumerate(result.rows) for slot, c in r.cells.items()
             ],
         )
@@ -147,10 +157,11 @@ def update_cell(run_id: int, row_idx: int, slot: str, cell: CellValue,
     with _connect(db_path) as conn:
         conn.execute(
             "UPDATE cells SET value=?, provenance=?, confidence=?, note=?, "
-            "reach=?, engagement=? "
-            "WHERE run_id=? AND row_idx=? AND slot=?",
+            + ", ".join(f"{name}=?" for name in _COMPANIONS)
+            + " WHERE run_id=? AND row_idx=? AND slot=?",
             (cell.value, cell.provenance, cell.confidence, cell.note,
-             cell.reach, cell.engagement, run_id, row_idx, slot),
+             *(getattr(cell, name) for name in _COMPANIONS),
+             run_id, row_idx, slot),
         )
 
 
@@ -161,8 +172,8 @@ def load_cells(run_id: int, db_path: str | Path | None = None) -> list[dict]:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT row_idx, slot, link, value, provenance, confidence, note, "
-            "reach, engagement "
-            "FROM cells WHERE run_id=? AND row_idx IS NOT NULL "
+            + ", ".join(_COMPANIONS) +
+            " FROM cells WHERE run_id=? AND row_idx IS NOT NULL "
             "AND value IS NOT NULL "
             "AND provenance IN ('collected','estimated','manual')",
             (run_id,),
@@ -188,8 +199,7 @@ def hydrate_cells(result: RunResult, cells: list[dict]) -> int:
             continue
         row.cells[slot] = CellValue(c["value"], c["provenance"],
                                     c["confidence"], c["note"],
-                                    reach=c.get("reach"),
-                                    engagement=c.get("engagement"))
+                                    **{n: c.get(n) for n in _COMPANIONS})
         restored += 1
     return restored
 
@@ -263,8 +273,8 @@ def record_override(run_id: int, row_no: int, slot: str, old, new,
                     row_idx: int | None = None) -> None:
     """Log a dashboard edit and write the new value through.
 
-    `cell` carries the value's real provenance, and now its reach and
-    engagement. Without it this defaulted to 'manual'/1.0, which silently
+    `cell` carries the value's real provenance, and now its reach, engagement
+    and clicks. Without it this defaulted to 'manual'/1.0, which silently
     relabelled dashboard *estimates* as hand-entered values — they then came
     back from a resume without their ≈ marking and with false confidence.
 
@@ -277,8 +287,8 @@ def record_override(run_id: int, row_no: int, slot: str, old, new,
     provenance = cell.provenance if cell is not None else "manual"
     confidence = cell.confidence if cell is not None else 1.0
     note = cell.note if cell is not None else "manual entry"
-    reach = cell.reach if cell is not None else None
-    engagement = cell.engagement if cell is not None else None
+    companions = tuple(getattr(cell, n) if cell is not None else None
+                       for n in _COMPANIONS)
     where, key = ("row_idx", row_idx) if row_idx is not None else ("row_no", row_no)
     with _connect(db_path) as conn:
         conn.execute(
@@ -287,9 +297,9 @@ def record_override(run_id: int, row_no: int, slot: str, old, new,
         )
         conn.execute(
             "UPDATE cells SET value=?, provenance=?, confidence=?, note=?, "
-            f"reach=?, engagement=? WHERE run_id=? AND {where}=? AND slot=?",
-            (new, provenance, confidence, note, reach, engagement,
-             run_id, key, slot),
+            + ", ".join(f"{n}=?" for n in _COMPANIONS)
+            + f" WHERE run_id=? AND {where}=? AND slot=?",
+            (new, provenance, confidence, note, *companions, run_id, key, slot),
         )
 
 
@@ -310,8 +320,9 @@ def record_link_removal(run_id: int, row_no: int, slot: str, url: str,
              datetime.now(timezone.utc).isoformat()),
         )
         conn.execute(
-            "UPDATE cells SET link=NULL, value=NULL, reach=NULL, engagement=NULL, "
-            "provenance='missing', confidence=0.0, note=?, removed_link=? "
+            "UPDATE cells SET link=NULL, value=NULL, "
+            + "".join(f"{n}=NULL, " for n in _COMPANIONS)
+            + "provenance='missing', confidence=0.0, note=?, removed_link=? "
             f"WHERE run_id=? AND {where}=? AND slot=?",
             (LINK_REMOVED_NOTE, url, run_id, key, slot),
         )

@@ -835,10 +835,15 @@ function provTip(c) {
 
 /* ═════════ cell editor ═════════ */
 const dialog = $("#cellDialog");
-/* Only Facebook: Meta publishes reach and engagement per post and the report
-   has a column for each. X's public page and the Instagram export offer
-   neither, so those slots would be collecting numbers nothing can print. */
+/* Only Facebook: Meta publishes reach, engagement and clicks per post and the
+   report has a column for each. X's public page and the Instagram export offer
+   none of them, so those slots would be collecting numbers nothing can print. */
 const HAS_COMPANIONS = (slot) => slot.startsWith("fb");
+/* field name -> its input, so the dialog reads and writes all three in one
+   place and a fourth figure is one line rather than four scattered ones. */
+const COMPANION_INPUTS = {
+  reach: "#manualReach", engagement: "#manualEngagement", clicks: "#manualClicks",
+};
 
 function openCellEditor(rowNo, slot) {
   state.editing = { rowNo, slot };
@@ -854,10 +859,11 @@ function openCellEditor(rowNo, slot) {
   link.hidden = !row.links[slot];
   if (row.links[slot]) link.href = row.links[slot];
   $("#manualValue").value = c.value ?? "";
-  const pair = $("#fbMetrics");
-  pair.hidden = !HAS_COMPANIONS(slot);
-  $("#manualReach").value = pair.hidden ? "" : (c.reach ?? "");
-  $("#manualEngagement").value = pair.hidden ? "" : (c.engagement ?? "");
+  const pane = $("#fbMetrics");
+  pane.hidden = !HAS_COMPANIONS(slot);
+  for (const [name, sel] of Object.entries(COMPANION_INPUTS)) {
+    $(sel).value = pane.hidden ? "" : (c[name] ?? "");
+  }
   // Nothing to strike off a slot the sheet never linked.
   $("#deadLinkRow").hidden = !row.links[slot];
   dialog.showModal();
@@ -918,15 +924,16 @@ dialog.addEventListener("close", async () => {
   const body = { run_id: state.run.run_id, row_no: rowNo, slot,
                  value: num("#manualValue") };
   if (HAS_COMPANIONS(slot)) {
-    body.reach = num("#manualReach");
-    body.engagement = num("#manualEngagement");
+    for (const [name, sel] of Object.entries(COMPANION_INPUTS)) body[name] = num(sel);
   }
   const res = await fetch("/api/override", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) { showError(await errText(res)); return; }
   const cell = await res.json();
-  // An older server accepts the request and drops the two extra figures without
+  // An older server accepts the request and drops the extra figures without
   // saying so, which is the one way this can fail silently.
-  if (body.reach != null && cell.reach == null) showError(RESTART_HINT);
+  const dropped = Object.keys(COMPANION_INPUTS)
+    .some((name) => body[name] != null && cell[name] == null);
+  if (dropped) showError(RESTART_HINT);
   const row = state.run.rows.find((r) => r.no === rowNo);
   row.cells[slot] = cell;
   recomputeCoverage();

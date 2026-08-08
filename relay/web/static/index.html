@@ -491,19 +491,23 @@ document.documentElement.dataset.theme = localStorage.getItem("relay-theme") || 
       <label>Views
         <input id="manualValue" type="number" min="0" placeholder="exact number">
       </label>
-      <!-- Facebook only: Meta publishes all three figures per post and the
+      <!-- Facebook only: Meta publishes all four figures per post and the
            report has a column for each. X and Instagram have no equivalent. -->
       <div id="fbMetrics" hidden>
-        <div class="metric-pair">
+        <div class="metric-grid">
           <label>Viewers (reach)
-            <input id="manualReach" type="number" min="0" placeholder="exact number">
+            <input id="manualReach" type="number" min="0" placeholder="number">
           </label>
           <label>Engagement
-            <input id="manualEngagement" type="number" min="0" placeholder="exact number">
+            <input id="manualEngagement" type="number" min="0" placeholder="number">
+          </label>
+          <label>Clicks
+            <input id="manualClicks" type="number" min="0" placeholder="number">
           </label>
         </div>
-        <p class="metric-hint">Both sit beside Views on the post's own Business Suite
-          page — reach counts people, engagement counts reactions, comments and shares.</p>
+        <p class="metric-hint">All three sit beside Views on the post's own Business
+          Suite page — reach counts people, clicks is the post's total clicks, and
+          engagement counts reactions, comments, shares and those clicks together.</p>
       </div>
     </div>
     <!-- the post is gone from the platform but the sheet still lists it -->
